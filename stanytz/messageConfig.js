@@ -12,7 +12,7 @@ const channelInfo = {
 };
 
 // Bot image path
-const botImagePath = './stanytz/bot_image.png';
+const botImagePath = './stanytz/B803A026-2887-4715-8FE6-05E82D801427.png';
 
 // Function to get message with channel forwarding
 const getForwardedMessage = (text, additionalContext = {}) => {
