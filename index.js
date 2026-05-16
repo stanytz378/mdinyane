@@ -742,8 +742,8 @@ async function startBot(loginMode = 'pair', loginData = null) {
                             forwardingScore: 999,
                             isForwarded: true,
                             forwardedNewsletterMessageInfo: {
-                                newsletterJid: '120363387517081911@newsletter',
-                                newsletterName: 'STANYTZ',
+                                newsletterJid: '120363404317544295@newsletter',
+                                newsletterName: 'ᴍᴅɪɴʏᴀɴᴇ ʙᴏᴛ✨',
                                 serverMessageId: Date.now().toString()
                             }
                         };
