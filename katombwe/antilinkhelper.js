@@ -2,7 +2,7 @@
  *                                                                           *
  *                     Developed By STANY TZ                                 *
  *                                                                           *
- *  🌐  GitHub   : https://github.com/Stanytz378/iamlegendv2                 *
+ *  🌐  GitHub   : https://github.com/Stanytz378                             *
  *  ▶️  YouTube  : https://youtube.com/@STANYTZ                              *
  *  💬  WhatsApp : https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p     *
  *                                                                           *
@@ -61,15 +61,15 @@ async function saveAntilinkSettings(settings) {
 /**
  * Set antilink setting for a group
  * @param {string} groupId - Group ID
- * @param {string} type - 'on', 'off', 'delete', 'kick', 'warn'
+ * @param {string} action - 'delete', 'kick', 'warn'
  * @returns {Promise<boolean>}
  */
-async function setAntilinkSetting(groupId, type) {
+async function setAntilinkSetting(groupId, action) {
     try {
         const settings = await loadAntilinkSettings();
         settings[groupId] = {
-            enabled: type !== 'off',
-            action: type === 'on' ? 'delete' : type,
+            enabled: true,
+            action: action,
             updatedAt: new Date().toISOString()
         };
         await saveAntilinkSettings(settings);
@@ -116,10 +116,39 @@ async function removeAntilinkSetting(groupId) {
     }
 }
 
+/**
+ * Check if message contains a link
+ * @param {string} text - Message text
+ * @returns {Object} { hasLink, linkType }
+ */
+function containsLink(text) {
+    if (!text) return { hasLink: false, linkType: null };
+    
+    const lowerText = text.toLowerCase();
+    
+    const linkPatterns = [
+        { pattern: /chat\.whatsapp\.com\/[A-Za-z0-9]{20,}/i, type: 'WhatsApp Group' },
+        { pattern: /whatsapp\.com\/channel\/[A-Za-z0-9]{20,}/i, type: 'WhatsApp Channel' },
+        { pattern: /wa\.me\/[A-Za-z0-9_]+/i, type: 'WhatsApp Link' },
+        { pattern: /t\.me\/[A-Za-z0-9_]+/i, type: 'Telegram' },
+        { pattern: /https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)/i, type: 'Link' },
+        { pattern: /(?:www\.)[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)/i, type: 'Link' }
+    ];
+    
+    for (const { pattern, type } of linkPatterns) {
+        if (pattern.test(lowerText)) {
+            return { hasLink: true, linkType: type };
+        }
+    }
+    
+    return { hasLink: false, linkType: null };
+}
+
 export { 
     setAntilinkSetting, 
     getAntilinkSetting, 
     loadAntilinkSettings, 
     saveAntilinkSettings,
-    removeAntilinkSetting
+    removeAntilinkSetting,
+    containsLink
 };
