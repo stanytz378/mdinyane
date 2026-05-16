@@ -18,7 +18,8 @@
   ],
   "author": "STANY TZ",
   "license": "MIT",
-  "@whiskeysockets/baileys": "^7.0.0-rc10",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc10",
     "axios": "^1.8.4",
     "chalk": "^5.6.2",
     "dotenv": "^17.2.3",
