@@ -1,0 +1,32 @@
+{
+  "name": "mdinyane-bot",
+  "version": "2.0.0",
+  "description": "MDINYANE WhatsApp Bot - Developed by STANY TZ",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "whatsapp-bot",
+    "mdinyane",
+    "stanytz",
+    "baileys",
+    "whatsapp-md"
+  ],
+  "author": "STANY TZ",
+  "license": "MIT",
+  "@whiskeysockets/baileys": "^7.0.0-rc10",
+    "axios": "^1.8.4",
+    "chalk": "^5.6.2",
+    "dotenv": "^17.2.3",
+    "moment-timezone": "^0.6.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
