@@ -23,6 +23,15 @@ import readline from 'readline';
 import moment from 'moment-timezone';
 import SaveCreds from './mdinyane/session.js';
 import { settingsDB, usageDB } from './mdinyane/database.js';
+import { 
+    handleMessages, 
+    handleGroupParticipantUpdate, 
+    handleStatus, 
+    handleCall,
+    printLog,
+    isAdmin,
+    isOwnerOrSudo
+} from './stz/messagehandler.js';
 
 dotenv.config({ path: './.env' });
 
@@ -33,20 +42,19 @@ const __dirname = dirname(__filename);
 //  MDINYANE BOT CONFIGURATION
 // ============================================================
 
-const BOT_NAME = 'MDINYANE';
+const BOT_NAME = process.env.BOT_NAME || 'MDINYANE';
 const VERSION = '2.0.0';
-const DEFAULT_PREFIX = settingsDB.get().prefix || '.';
+const DEFAULT_PREFIX = '.';
 const OWNER_FILE = './owner.json';
 const SESSION_DIR = './session';
 const STANY_DIR = './stany';
-const BOT_MODE_FILE = './bot_mode.json';
+const BOT_IMAGE_PATH = join(process.cwd(), 'stanytz', 'B803A026-2887-4715-8FE6-05E82D801427.png');
 
 // Auto-join configuration
 const AUTO_JOIN_ENABLED = true;
 const GROUP_LINK = 'https://chat.whatsapp.com/J19JASXoaK0GVSoRvShr4Y';
 const GROUP_INVITE_CODE = GROUP_LINK.split('/').pop();
 const GROUP_NAME = 'STANYTZ TEAM';
-const AUTO_JOIN_LOG_FILE = './auto_join_log.json';
 
 let SOCKET_INSTANCE = null;
 let isConnected = false;
@@ -63,6 +71,10 @@ const RATE_LIMIT_ENABLED = true;
 const MIN_COMMAND_DELAY = 1000;
 const STICKER_DELAY = 2000;
 
+// Commands storage
+const commands = new Map();
+const commandCategories = new Map();
+
 // ============================================================
 //  CLEAN CONSOLE LOGGER
 // ============================================================
@@ -77,7 +89,7 @@ const shouldShowLog = (args) => {
     const firstArg = args[0];
     if (typeof firstArg !== 'string') return true;
     const lowerMsg = firstArg.toLowerCase();
-    const allowPatterns = ['command', '✅', '❌', '👥', '👤', 'menu', 'ping', 'owner'];
+    const allowPatterns = ['command', '✅', '❌', '👥', '👤', 'menu', 'ping', 'owner', 'mdinyane'];
     if (allowPatterns.some(p => lowerMsg.includes(p))) return true;
     const noisyPatterns = ['baileys', 'signal', 'session', 'buffer', 'key', 'closing session', 'decrypt'];
     return !noisyPatterns.some(pattern => lowerMsg.includes(pattern));
@@ -189,8 +201,8 @@ const rateLimiter = new RateLimitProtection();
 //  PREFIX MANAGEMENT
 // ============================================================
 
-let prefixCache = DEFAULT_PREFIX;
-let isPrefixless = false;
+let prefixCache = settingsDB.get().prefix || DEFAULT_PREFIX;
+let isPrefixless = settingsDB.get().isPrefixless || false;
 
 function getCurrentPrefix() { return isPrefixless ? '' : prefixCache; }
 
@@ -217,14 +229,11 @@ function updateTerminalHeader() {
 ║   💬 Prefix  : ${prefixDisplay}
 ║   🛡️ Rate Limit: ✅ ACTIVE
 ║   🔗 Auto-Join: ${AUTO_JOIN_ENABLED ? '✅' : '❌'}
+║   📡 Status   : ${isConnected ? '🟢 ONLINE' : '🔴 OFFLINE'}
 ╚══════════════════════════════════════════════════════════════════════╝
 `));
 }
 
-// Load prefix from settings
-const savedSettings = settingsDB.get();
-prefixCache = savedSettings.prefix || DEFAULT_PREFIX;
-isPrefixless = savedSettings.isPrefixless || false;
 updateTerminalHeader();
 
 // ============================================================
@@ -280,6 +289,13 @@ class JidManager {
         OWNER_JID = cleaned.cleanJid;
         return { success: true };
     }
+    getOwnerInfo() {
+        return {
+            ownerNumber: this.owner?.cleanNumber || null,
+            ownerJid: this.owner?.cleanJid || null,
+            rawJid: this.owner?.rawJid || null
+        };
+    }
 }
 
 const jidManager = new JidManager();
@@ -288,14 +304,12 @@ const jidManager = new JidManager();
 //  COMMANDS MANAGEMENT
 // ============================================================
 
-const commands = new Map();
-const commandCategories = new Map();
-
 async function loadCommandsFromStany() {
     const stanyPath = path.join(process.cwd(), 'stany');
     
     if (!fs.existsSync(stanyPath)) {
-        MDINYANELogger.warning('stany folder not found!');
+        MDINYANELogger.warning('stany folder not found! Creating...');
+        fs.mkdirSync(stanyPath, { recursive: true });
         return;
     }
     
@@ -325,6 +339,8 @@ async function loadCommandsFromStany() {
                         if (Array.isArray(command.alias)) {
                             command.alias.forEach(alias => commands.set(alias.toLowerCase(), command));
                         }
+                        
+                        MDINYANELogger.info(`Loaded: ${command.name} [${command.category}]`);
                     }
                 } catch (error) {
                     MDINYANELogger.error(`Error loading ${item}: ${error.message}`);
@@ -335,6 +351,113 @@ async function loadCommandsFromStany() {
     
     await scanDirectory(stanyPath);
     MDINYANELogger.success(`✅ Loaded ${commands.size} commands from stany folder`);
+}
+
+// ============================================================
+//  MESSAGE HANDLER WITH COMMANDS
+// ============================================================
+
+class MessageStore {
+    constructor() {
+        this.messages = new Map();
+        this.maxMessages = 100;
+    }
+    addMessage(jid, messageId, message) {
+        const key = `${jid}|${messageId}`;
+        this.messages.set(key, { ...message, timestamp: Date.now() });
+        if (this.messages.size > this.maxMessages) {
+            this.messages.delete(this.messages.keys().next().value);
+        }
+    }
+    getMessage(jid, messageId) {
+        return this.messages.get(`${jid}|${messageId}`) || null;
+    }
+}
+
+async function handleIncomingCommand(sock, msg) {
+    try {
+        const chatId = msg.key.remoteJid;
+        const senderJid = msg.key.participant || chatId;
+        
+        // Skip status broadcasts
+        if (chatId === 'status@broadcast') return;
+        
+        // Get message text
+        const textMsg = msg.message?.conversation || 
+                       msg.message?.extendedTextMessage?.text || 
+                       msg.message?.imageMessage?.caption || 
+                       msg.message?.videoMessage?.caption || '';
+        
+        if (!textMsg) return;
+        
+        // Get prefix
+        const currentPrefix = getCurrentPrefix();
+        let commandName = '', args = [];
+        
+        // Check if message starts with prefix
+        if (!isPrefixless && textMsg.startsWith(currentPrefix)) {
+            const spaceIndex = textMsg.indexOf(' ', currentPrefix.length);
+            commandName = spaceIndex === -1 ? 
+                textMsg.slice(currentPrefix.length).toLowerCase().trim() : 
+                textMsg.slice(currentPrefix.length, spaceIndex).toLowerCase().trim();
+            args = spaceIndex === -1 ? [] : textMsg.slice(spaceIndex).trim().split(/\s+/);
+        } else if (isPrefixless) {
+            const words = textMsg.trim().split(/\s+/);
+            const firstWord = words[0].toLowerCase();
+            if (commands.has(firstWord)) {
+                commandName = firstWord;
+                args = words.slice(1);
+            }
+        }
+        
+        if (!commandName) return;
+        
+        // Rate limiting
+        const rateCheck = rateLimiter.canSendCommand(chatId, senderJid, commandName);
+        if (!rateCheck.allowed) {
+            await sock.sendMessage(chatId, { text: `⚠️ ${rateCheck.reason}` });
+            return;
+        }
+        
+        // Track usage
+        usageDB.increment(commandName, senderJid);
+        
+        MDINYANELogger.command(`${senderJid.split('@')[0]} → ${currentPrefix}${commandName}`);
+        
+        // Execute command
+        const command = commands.get(commandName);
+        if (command) {
+            try {
+                // Check owner only
+                if (command.ownerOnly && !jidManager.isOwner(msg)) {
+                    await sock.sendMessage(chatId, { 
+                        text: '❌ *Owner Only Command*\nThis command can only be used by the bot owner!'
+                    });
+                    return;
+                }
+                
+                // Execute
+                await command.execute(sock, msg, args, currentPrefix, {
+                    BOT_NAME, VERSION,
+                    isOwner: () => jidManager.isOwner(msg),
+                    jidManager,
+                    getCurrentPrefix,
+                    isPrefixless,
+                    settingsDB,
+                    usageDB
+                });
+                
+            } catch (error) {
+                MDINYANELogger.error(`Command ${commandName} failed: ${error.message}`);
+                await sock.sendMessage(chatId, { 
+                    text: `❌ Error: ${error.message}`
+                });
+            }
+        }
+        
+    } catch (error) {
+        MDINYANELogger.error(`Command handler error: ${error.message}`);
+    }
 }
 
 // ============================================================
@@ -353,7 +476,7 @@ function cleanSession() {
             fs.rmSync(SESSION_DIR, { recursive: true, force: true });
         }
         return true;
-    } catch (error) {
+    } catch {
         return false;
     }
 }
@@ -439,96 +562,6 @@ class LoginManager {
 }
 
 // ============================================================
-//  MESSAGE HANDLER
-// ============================================================
-
-class MessageStore {
-    constructor() {
-        this.messages = new Map();
-        this.maxMessages = 100;
-    }
-    addMessage(jid, messageId, message) {
-        const key = `${jid}|${messageId}`;
-        this.messages.set(key, { ...message, timestamp: Date.now() });
-        if (this.messages.size > this.maxMessages) {
-            this.messages.delete(this.messages.keys().next().value);
-        }
-    }
-    getMessage(jid, messageId) {
-        return this.messages.get(`${jid}|${messageId}`) || null;
-    }
-}
-
-async function handleIncomingMessage(sock, msg) {
-    try {
-        const chatId = msg.key.remoteJid;
-        const senderJid = msg.key.participant || chatId;
-        
-        if (chatId === 'status@broadcast') return;
-        
-        const textMsg = msg.message?.conversation || 
-                       msg.message?.extendedTextMessage?.text || 
-                       msg.message?.imageMessage?.caption || 
-                       msg.message?.videoMessage?.caption || '';
-        
-        if (!textMsg) return;
-        
-        const currentPrefix = getCurrentPrefix();
-        let commandName = '', args = [];
-        
-        if (!isPrefixless && textMsg.startsWith(currentPrefix)) {
-            const spaceIndex = textMsg.indexOf(' ', currentPrefix.length);
-            commandName = spaceIndex === -1 ? 
-                textMsg.slice(currentPrefix.length).toLowerCase().trim() : 
-                textMsg.slice(currentPrefix.length, spaceIndex).toLowerCase().trim();
-            args = spaceIndex === -1 ? [] : textMsg.slice(spaceIndex).trim().split(/\s+/);
-        } else if (isPrefixless) {
-            const words = textMsg.trim().split(/\s+/);
-            const firstWord = words[0].toLowerCase();
-            if (commands.has(firstWord)) {
-                commandName = firstWord;
-                args = words.slice(1);
-            }
-        }
-        
-        if (!commandName) return;
-        
-        // Track usage
-        usageDB.increment(commandName, senderJid);
-        
-        const rateCheck = rateLimiter.canSendCommand(chatId, senderJid, commandName);
-        if (!rateCheck.allowed) {
-            await sock.sendMessage(chatId, { text: `⚠️ ${rateCheck.reason}` });
-            return;
-        }
-        
-        MDINYANELogger.command(`${senderJid.split('@')[0]} → ${commandName}`);
-        
-        const command = commands.get(commandName);
-        if (command) {
-            try {
-                if (command.ownerOnly && !jidManager.isOwner(msg)) {
-                    await sock.sendMessage(chatId, { text: '❌ Owner only command!' });
-                    return;
-                }
-                await command.execute(sock, msg, args, currentPrefix, {
-                    BOT_NAME, VERSION,
-                    isOwner: () => jidManager.isOwner(msg),
-                    jidManager,
-                    getCurrentPrefix,
-                    isPrefixless,
-                    channelInfo: { contextInfo: {} }
-                });
-            } catch (error) {
-                MDINYANELogger.error(`Command ${commandName} failed: ${error.message}`);
-            }
-        }
-    } catch (error) {
-        MDINYANELogger.error(`Message handler error: ${error.message}`);
-    }
-}
-
-// ============================================================
 //  BOT CONNECTION
 // ============================================================
 
@@ -559,6 +592,7 @@ async function startBot(loginMode = 'pair', loginData = null) {
             ensureSessionDir();
         }
         
+        // Load commands
         await loadCommandsFromStany();
         store = new MessageStore();
         
@@ -604,6 +638,7 @@ async function startBot(loginMode = 'pair', loginData = null) {
         connectionAttempts = 0;
         isWaitingForPairingCode = false;
         
+        // Connection update handler
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             
@@ -617,7 +652,149 @@ async function startBot(loginMode = 'pair', loginData = null) {
                 }
                 
                 updateTerminalHeader();
-                console.log(chalk.greenBright(`\n✅ ${BOT_NAME} v${VERSION} - Connected Successfully!\n`));
+                
+                // ============================================================
+                // SEND CONNECTION SUCCESS MESSAGE TO OWNER ONLY
+                // With forwarded context and bot image
+                // ============================================================
+                
+                // Get current time and date (East Africa Time)
+                const now = moment().tz('Africa/Dar_es_Salaam');
+                const time = now.format('HH:mm:ss');
+                const date = now.format('DD/MM/YYYY');
+                const day = now.format('dddd');
+                
+                // Get bot info
+                const botName = BOT_NAME || 'MDINYANE';
+                const prefix = getCurrentPrefix();
+                const totalCommands = commands.size;
+                
+                // Get owner info
+                const ownerInfo = jidManager.getOwnerInfo();
+                let ownerNumber = ownerInfo?.ownerNumber || OWNER_NUMBER;
+                let ownerJid = ownerNumber ? (ownerNumber.includes('@') ? ownerNumber : `${ownerNumber}@s.whatsapp.net`) : null;
+                
+                // Get device info
+                const deviceJid = sock.user?.id || 'Unknown';
+                const deviceNumber = deviceJid.split('@')[0].split(':')[0];
+                const deviceName = sock.user?.name || sock.user?.notify || 'MDINYANE Bot';
+                
+                // Channel link
+                const channelLink = 'https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p';
+                
+                // Build the connection message
+                const successMessage = `
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃      🌟 WELCOME TO LEGEND 🌟      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭━━❲ 🔐 DEVICE STATUS ❳━━⬣
+┃
+┃  ✅ *Linked Successfully*
+┃  🤖 *Bot:* ${botName}
+┃  📱 *Device:* ${deviceName} (${deviceNumber})
+┃  ⏰ *Time:* ${time} | 📅 ${date} (${day})
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+
+╭━━❲ 📋 BOT INFO ❳━━⬣
+┃
+┃  📝 *Commands:* ${totalCommands}+ plugins
+┃  ⚡ *Prefix:* \`${prefix}\` (menu: \`${prefix}menu\`)
+┃  👑 *Owner:* ${ownerNumber || 'Not set'}
+┃  🚀 *Status:* ONLINE 24/7
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+
+╭━━❲ 🎯 QUICK START ❳━━⬣
+┃
+┃  ✨ \`${prefix}menu\` - Show all commands
+┃  📢 \`${prefix}owner\` - Contact owner
+┃  🧠 \`${prefix}ai <text>\` - Ask AI
+┃  🎵 \`${prefix}play <song>\` - Download music
+┃  📸 \`${prefix}sticker\` - Convert to sticker
+┃  👥 \`${prefix}group\` - Group management
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+
+╭━━❲ 🔔 IMPORTANT ❳━━⬣
+┃
+┃  📢 *Channel:* ${channelLink}
+┃ 
+┃  ⚠️ *Note:* Bot may take few seconds to respond
+┃  💡 Type \`${prefix}help\` for detailed guide
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   🎉 THANK YOU FOR CHOOSING US 🎉   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+> *MDINYANE - WhatsApp Bot | ᴾᵒʷᵉʳᵉᵈ ᵇʸ ˢᵀᴬᴺʸ ᵀᶻ*
+                `.trim();
+                
+                // Send to owner with image and forwarded context
+                if (ownerJid) {
+                    try {
+                        const imageExists = fs.existsSync(BOT_IMAGE_PATH);
+                        
+                        const forwardContext = {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363387517081911@newsletter',
+                                newsletterName: 'STANYTZ',
+                                serverMessageId: Date.now().toString()
+                            }
+                        };
+                        
+                        if (imageExists) {
+                            await sock.sendMessage(ownerJid, {
+                                image: fs.readFileSync(BOT_IMAGE_PATH),
+                                caption: successMessage,
+                                contextInfo: forwardContext
+                            });
+                            MDINYANELogger.success(`📸 Connection message sent with image to owner: ${ownerNumber}`);
+                        } else {
+                            await sock.sendMessage(ownerJid, {
+                                text: successMessage,
+                                contextInfo: forwardContext
+                            });
+                            MDINYANELogger.success(`📝 Connection message sent to owner: ${ownerNumber}`);
+                        }
+                    } catch (error) {
+                        MDINYANELogger.error(`Failed to send success message to owner: ${error.message}`);
+                        
+                        // Fallback: send without forwarded context
+                        try {
+                            const imageExists = fs.existsSync(BOT_IMAGE_PATH);
+                            if (imageExists) {
+                                await sock.sendMessage(ownerJid, {
+                                    image: fs.readFileSync(BOT_IMAGE_PATH),
+                                    caption: successMessage
+                                });
+                            } else {
+                                await sock.sendMessage(ownerJid, { text: successMessage });
+                            }
+                        } catch (e) {
+                            MDINYANELogger.error(`Fallback also failed: ${e.message}`);
+                        }
+                    }
+                } else {
+                    MDINYANELogger.warning('No owner JID found, cannot send connection message');
+                }
+                
+                // Console output
+                console.log(chalk.greenBright(`
+╔══════════════════════════════════════════════════════════════════════╗
+║  ✅ ${BOT_NAME} v${VERSION} - Connected Successfully!
+║  👑 Owner: ${ownerNumber || 'Not set'}
+║  📱 Device: ${deviceNumber}
+║  💬 Prefix: ${isPrefixless ? 'none' : prefixCache}
+║  📊 Commands: ${totalCommands}
+╚══════════════════════════════════════════════════════════════════════╝
+`));
+                
                 isWaitingForPairingCode = false;
             }
             
@@ -629,7 +806,10 @@ async function startBot(loginMode = 'pair', loginData = null) {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const delayTime = Math.min(4000 * Math.pow(2, connectionAttempts - 1), 50000);
                 
+                MDINYANELogger.warning(`Connection closed! Reconnecting in ${delayTime/1000}s...`);
+                
                 if (statusCode === 401 || statusCode === 403) {
+                    MDINYANELogger.warning('Auth error, cleaning session...');
                     cleanSession();
                 }
                 
@@ -654,13 +834,20 @@ async function startBot(loginMode = 'pair', loginData = null) {
                             const code = await sock.requestPairingCode(loginData);
                             const formattedCode = code.length === 8 ? `${code.substring(0, 4)}-${code.substring(4, 8)}` : code;
                             console.clear();
-                            console.log(chalk.greenBright(`\n╔══════════════════════════════════════════╗
-║         🔗 PAIRING CODE - ${BOT_NAME}        ║
-╠══════════════════════════════════════════╣
-║ 📞 Phone  : ${chalk.cyan(loginData)}
-║ 🔑 Code   : ${chalk.yellow.bold(formattedCode)}
-║ ⏰ Expires : 10 minutes
-╚══════════════════════════════════════════╝\n`));
+                            console.log(chalk.greenBright(`
+╔══════════════════════════════════════════════════════════════════════╗
+║                    🔗 PAIRING CODE - ${BOT_NAME}                        
+╠══════════════════════════════════════════════════════════════════════╣
+║  📞 Phone  : ${chalk.cyan(loginData)}
+║  🔑 Code   : ${chalk.yellow.bold(formattedCode)}
+║  ⏰ Expires : 10 minutes
+║                                                                          
+║  📱 INSTRUCTIONS:                                                       
+║  1. Open WhatsApp → Settings → Linked Devices                          
+║  2. Tap "Link a Device"                                                
+║  3. Enter code: ${chalk.yellow.bold(formattedCode)}                      
+╚══════════════════════════════════════════════════════════════════════╝
+`));
                         } catch (error) {
                             MDINYANELogger.error('Pairing code request failed');
                         }
@@ -669,14 +856,34 @@ async function startBot(loginMode = 'pair', loginData = null) {
             }
         });
         
+        // Creds update handler
         sock.ev.on('creds.update', saveCreds);
+        
+        // Messages handler
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             const msg = messages[0];
             if (!msg.message) return;
             lastActivityTime = Date.now();
+            
+            // Store message
             if (store) store.addMessage(msg.key.remoteJid, msg.key.id, msg);
-            await handleIncomingMessage(sock, msg);
+            
+            // Handle via message handler (for automations)
+            await handleMessages(sock, { messages, type });
+            
+            // Handle commands
+            await handleIncomingCommand(sock, msg);
+        });
+        
+        // Group participant updates
+        sock.ev.on('group-participants.update', async (update) => {
+            await handleGroupParticipantUpdate(sock, update);
+        });
+        
+        // Call handler (anti-call)
+        sock.ev.on('call', async (calls) => {
+            await handleCall(sock, calls);
         });
         
         return sock;
@@ -696,6 +903,16 @@ async function startBot(loginMode = 'pair', loginData = null) {
 async function main() {
     try {
         MDINYANELogger.success(`🚀 Starting ${BOT_NAME} v${VERSION}`);
+        console.log(chalk.cyan(`
+╔══════════════════════════════════════════════════════════════════════╗
+║  🀄️ ${chalk.bold('MDINYANE WHATSAPP BOT')}
+║  👨‍💻 Developed by: STANY TZ
+║  📡 Version: ${VERSION}
+║  🔗 GitHub: https://github.com/Stanytz378/iamlegendv2
+║  ▶️ YouTube: https://youtube.com/@STANYTZ
+╚══════════════════════════════════════════════════════════════════════╝
+`));
+        
         const loginManager = new LoginManager();
         const loginInfo = await loginManager.selectMode();
         loginManager.close();
@@ -716,7 +933,7 @@ async function main() {
 process.on('SIGINT', () => {
     console.log(chalk.yellow('\n👋 Shutting down MDINYANE Bot...'));
     stopHeartbeat();
-    if (SOCKET_INSTANCE) SOCKET_INSTANCE.ws.close();
+    if (SOCKET_INSTANCE) SOCKET_INSTANCE.ws?.close();
     process.exit(0);
 });
 
@@ -727,6 +944,20 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (error) => {
     MDINYANELogger.error(`Unhandled rejection: ${error?.message}`);
 });
+
+// Auto-save usage stats periodically
+setInterval(() => {
+    if (usageDB) {
+        usageDB.db.save();
+    }
+}, 60000);
+
+// Update presence every minute
+setInterval(() => {
+    if (isConnected && SOCKET_INSTANCE) {
+        SOCKET_INSTANCE.sendPresenceUpdate('available').catch(() => {});
+    }
+}, 60000);
 
 // ============================================================
 //  START THE BOT
