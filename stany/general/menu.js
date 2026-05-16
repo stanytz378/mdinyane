@@ -20,17 +20,9 @@ if (!fs.existsSync(USAGE_STATS_FILE)) {
 }
 
 // ============================================================
-// 50+ QUOTES
+// QUOTES
 // ============================================================
 const QUOTES = [
-    "The only way to do great work is to love what you do. - Steve Jobs",
-    "Life is what happens when you're busy making other plans. - John Lennon",
-    "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt",
-    "Success is not final, failure is not fatal: it is the courage to continue that counts. - Winston Churchill",
-    "The only limit to our realization of tomorrow is our doubts of today. - Franklin D. Roosevelt",
-    "It does not matter how slowly you go as long as you do not stop. - Confucius",
-    "Everything you've ever wanted is on the other side of fear. - George Addair",
-    "Your time is limited, don't waste it living someone else's life. - Steve Jobs",
     "I'm not lazy, I'm just on my energy saving mode.",
     "Life is short, smile while you still have teeth.",
     "I may be a bad influence, but darn I am fun!",
@@ -38,49 +30,35 @@ const QUOTES = [
     "Why don't some couples go to the gym? Because some relationships don't work out.",
     "I told my wife she should embrace her mistakes... She gave me a hug.",
     "I'm great at multitasking. I can waste time, be unproductive, and procrastinate all at once.",
+    "You know you're getting old when you stoop to tie your shoelaces and wonder what else you could do while you're down there.",
     "I'm so good at sleeping, I can do it with my eyes closed.",
     "If you think nobody cares if you're alive, try missing a couple of payments.",
     "I used to think I was indecisive, but now I'm not so sure.",
     "If you can't convince them, confuse them.",
+    "I told my wife she was drawing her eyebrows too high. She looked surprised.",
     "I'm not clumsy, I'm just on a mission to test gravity.",
     "Life is like a box of chocolates; it doesn't last long if you're hungry.",
     "The early bird can have the worm because worms are gross and mornings are stupid.",
     "If life gives you lemons, make lemonade. Then find someone whose life has given them vodka and have a party!",
     "The road to success is always under construction.",
+    "I am so clever that sometimes I don't understand a single word of what I am saying.",
     "A day without sunshine is like, you know, night.",
     "The best way to predict the future is to create it.",
+    "The only way to do great work is to love what you do. - Steve Jobs",
+    "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt",
+    "Success is not final, failure is not fatal: it is the courage to continue that counts. - Winston Churchill",
+    "Your time is limited, don't waste it living someone else's life. - Steve Jobs",
     "Don't watch the clock; do what it does. Keep going. - Sam Levenson",
-    "The only person you are destined to become is the person you decide to be. - Ralph Waldo Emerson",
     "Believe you can and you're halfway there. - Theodore Roosevelt",
-    "The future depends on what you do today. - Mahatma Gandhi",
-    "Don't let yesterday take up too much of today. - Will Rogers",
     "Happiness is not by chance, but by choice. - Jim Rohn",
     "Dream it. Wish it. Do it.",
-    "Success doesn't come to you, you go to it.",
-    "The harder you work for something, the greater you'll feel when you achieve it.",
     "Wake up with determination. Go to bed with satisfaction.",
     "Small steps every day lead to big results.",
     "Be stronger than your excuses.",
     "Your only limit is your mind.",
     "Progress, not perfection.",
-    "Start where you are. Use what you have. Do what you can.",
-    "Fall seven times, stand up eight.",
-    "The secret of getting ahead is getting started. - Mark Twain"
+    "Fall seven times, stand up eight."
 ];
-
-// ============================================================
-// FUNCTION: Extract clean phone number from JID or LID
-// ============================================================
-function getCleanNumber(jid) {
-    if (!jid) return 'Unknown';
-    let clean = jid.split('@')[0];
-    clean = clean.split(':')[0];
-    clean = clean.replace(/[^0-9]/g, '');
-    if (clean && clean.length > 0) {
-        return `+${clean}`;
-    }
-    return 'Unknown';
-}
 
 // ============================================================
 // FUNCTION: Update command usage stats
@@ -145,7 +123,8 @@ async function loadCommandsFromStany(stanyPath) {
                         }
                         categories.get(cmdCategory).push({
                             name: command.name,
-                            icon: command.icon || '',
+                            description: command.description || '',
+                            icon: command.icon || '📌',
                             ownerOnly: command.ownerOnly || false
                         });
                     }
@@ -166,6 +145,7 @@ async function loadCommandsFromStany(stanyPath) {
     if (!menuExists) {
         categories.get('general').push({
             name: 'menu',
+            description: 'Show bot menu',
             icon: '📋',
             ownerOnly: false
         });
@@ -189,8 +169,7 @@ function getCategoryIcon(category) {
         'media': '📷',
         'download': '⬇️',
         'ai': '🤖',
-        'games': '🎲',
-        'sticker': '🎨'
+        'games': '🎲'
     };
     return icons[category.toLowerCase()] || '📁';
 }
@@ -208,9 +187,8 @@ export default {
     async execute(sock, msg, args, currentPrefix, { BOT_NAME, VERSION, isOwner, getCurrentPrefix, isPrefixless }) {
         
         const chatId = msg.key.remoteJid;
-        const senderRaw = msg.key.participant || chatId;
+        const sender = msg.key.participant || chatId;
         const isOwnerUser = isOwner(msg);
-        const cleanNumber = getCleanNumber(senderRaw);
         
         await updateCommandUsage('menu');
         
@@ -218,14 +196,6 @@ export default {
         const day = now.format('dddd');
         const date = now.format('DD/MM/YYYY');
         const time = now.format('HH:mm:ss');
-        
-        let greeting;
-        if (time < '05:00:00') greeting = 'Good Early Morning 🌉';
-        else if (time < '11:00:00') greeting = 'Good Morning 🌄';
-        else if (time < '15:00:00') greeting = 'Good Afternoon 🏙️';
-        else if (time < '18:00:00') greeting = 'Good Evening 🌅';
-        else if (time < '19:00:00') greeting = 'Good Evening 🌃';
-        else greeting = 'Good Night 🌌';
         
         const randomQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
         
@@ -236,99 +206,76 @@ export default {
         const botName = BOT_NAME || 'MDINYANE';
         
         // ============================================================
-        // TOP MENU SECTION
+        // BUILD MENU - STYLE KAMA ULIVYOONYESHA
         // ============================================================
-        let menu = `╭──❍「 🔥 TOP MENU 」❍\n`;
+        let menu = `╭──❍「 *TOP MENU* 」❍\n`;
         
         if (topCommands.length > 0) {
-            for (let i = 0; i < topCommands.length; i++) {
+            for (let i = 0; i < Math.min(topCommands.length, 5); i++) {
                 const cmd = topCommands[i];
-                menu += `│ ${prefixDisplay}${cmd.name}: ${cmd.count} uses\n`;
+                const icon = getCommandIcon(cmd.name);
+                menu += `│${icon} ${prefixDisplay}${cmd.name}\n`;
             }
         } else {
-            menu += `│ ${prefixDisplay}menu\n`;
-            menu += `│ ${prefixDisplay}ping\n`;
-            menu += `│ ${prefixDisplay}owner\n`;
+            menu += `│📋 ${prefixDisplay}menu\n`;
+            menu += `│🏓 ${prefixDisplay}ping\n`;
+            menu += `│👑 ${prefixDisplay}owner\n`;
         }
         menu += `╰─┬────❍\n`;
         
-        // ============================================================
-        // USER INFO SECTION
-        // ============================================================
-        menu += `╭─┴─❍「 👤 USER INFO 」❍\n`;
-        menu += `├ Name : ${msg.pushName || 'No Name'}\n`;
-        menu += `├ Role : ${isOwnerUser ? 'OWNER' : 'USER'}\n`;
-        menu += `├ Number : ${cleanNumber}\n`;
+        // USER INFO
+        menu += `╭─┴─❍「 *USER INFO* 」❍\n`;
+        menu += `├ 👤 *Name* : ${msg.pushName || 'No Name'}\n`;
+        menu += `├ 👑 *User* : ${isOwnerUser ? 'OWNER' : 'USER'}\n`;
         menu += `╰─┬────❍\n`;
         
-        // ============================================================
-        // BOT INFO SECTION
-        // ============================================================
-        let totalCommands = 0;
-        for (const commands of commandsByCategory.values()) {
-            totalCommands += commands.length;
-        }
-        
-        menu += `╭─┴─❍「 🤖 BOT INFO 」❍\n`;
-        menu += `├ Name : ${botName}\n`;
-        menu += `├ Version : ${VERSION}\n`;
-        menu += `├ Developer : STANY TZ\n`;
-        menu += `├ Prefix : ${isPrefixless ? 'None' : prefixDisplay}\n`;
-        menu += `├ Commands : ${totalCommands}\n`;
+        // BOT INFO
+        menu += `╭─┴─❍「 *BOT INFO* 」❍\n`;
+        menu += `├ 🤖 *App* : ${botName}\n`;
+        menu += `├ 📌 *Version* : ${VERSION}\n`;
+        menu += `├ 👨‍💻 *Owner* : STANY TZ\n`;
+        menu += `├ 🌍 *Mode* : Public\n`;
+        menu += `├ 🔧 *Prefix* : ${prefixDisplay}\n`;
         menu += `╰─┬────❍\n`;
         
-        // ============================================================
-        // COMMANDS BY CATEGORY - SAFI, BILA EMOJI NYINGI
-        // ============================================================
+        // COMMANDS BY CATEGORY
         for (const [category, commands] of commandsByCategory) {
             if (commands.length === 0) continue;
             
             const categoryIcon = getCategoryIcon(category);
-            menu += `╭─┴─❍「 ${categoryIcon} ${category.toUpperCase()} 」❍\n`;
+            menu += `╭─┴─❍「 *${categoryIcon} ${category.toUpperCase()} COMMANDS* 」❍\n`;
             
             const sortedCommands = commands.sort((a, b) => a.name.localeCompare(b.name));
             let count = 0;
             
             for (const cmd of sortedCommands) {
                 if (cmd.ownerOnly && !isOwnerUser) continue;
-                if (count >= 20) {
-                    menu += `│ +${commands.length - count} more...\n`;
+                if (count >= 15) {
+                    menu += `│ 📌 +${commands.length - count} more...\n`;
                     break;
                 }
-                // Command only - no extra emoji
-                menu += `│ ${prefixDisplay}${cmd.name}\n`;
+                const cmdIcon = cmd.icon || '📌';
+                const desc = cmd.description ? ` - ${cmd.description}` : '';
+                menu += `│ ${cmdIcon} ${prefixDisplay}${cmd.name}${desc}\n`;
                 count++;
             }
             menu += `╰──────❍\n`;
         }
         
-        // ============================================================
-        // STATISTICS SECTION
-        // ============================================================
-        const stats = getTotalStats();
-        menu += `╭─┴─❍「 📊 STATISTICS 」❍\n`;
-        menu += `├ Date : ${date}\n`;
-        menu += `├ Day : ${day}\n`;
-        menu += `├ Time : ${time} EAT\n`;
-        menu += `├ Total Commands Used : ${stats.total || 0}\n`;
+        // ABOUT SECTION
+        menu += `╭─┴─❍「 *ABOUT* 」❍\n`;
+        menu += `├ 📅 *Date* : ${date}\n`;
+        menu += `├ 📆 *Day* : ${day}\n`;
+        menu += `├ ⏰ *Time* : ${time} EAT\n`;
         menu += `╰──────❍\n\n`;
         
-        // ============================================================
-        // QUOTE SECTION
-        // ============================================================
-        menu += `╭─❍「 💭 QUOTE OF THE DAY 」❍\n`;
-        menu += `│\n`;
-        menu += `│ "${randomQuote}"\n`;
-        menu += `│\n`;
-        menu += `╰──────❍\n\n`;
+        // QUOTE
+        menu += `✨ *"${randomQuote}"* ✨\n\n`;
         
-        // ============================================================
-        // FOOTER - CLEAN
-        // ============================================================
-        menu += `Use ${prefixDisplay}help <command> to see command details\n`;
-        menu += `Tap "View Channel", Follow and React for more updates\n`;
-        menu += `Bot is 24/7 Active | Enjoy!\n\n`;
-        menu += `▰▰▰ © ${botName.toUpperCase()} BY STANY TZ ▰▰▰`;
+        // FOOTER
+        menu += `_📌 Use ${prefixDisplay}help <command> for detailed info_\n`;
+        menu += `_🎯 YouTube: @Stanytz1 | GitHub: Stanytz378_\n\n`;
+        menu += `▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
         
         // ============================================================
         // SEND MESSAGE
@@ -342,14 +289,14 @@ export default {
                     image: fs.readFileSync(imageFullPath),
                     caption: menu,
                     contextInfo: channelInfo.contextInfo,
-                    mentions: [senderRaw]
+                    mentions: [sender]
                 }, { quoted: msg });
-                console.log('✅ Menu sent');
+                console.log('✅ Menu sent with image');
             } else {
                 await sock.sendMessage(chatId, {
                     text: menu,
                     contextInfo: channelInfo.contextInfo,
-                    mentions: [senderRaw]
+                    mentions: [sender]
                 }, { quoted: msg });
                 console.log('✅ Menu sent');
             }
@@ -357,11 +304,30 @@ export default {
             console.error('Error sending menu:', error);
             await sock.sendMessage(chatId, {
                 text: menu,
-                mentions: [senderRaw]
+                mentions: [sender]
             }, { quoted: msg });
         }
     }
 };
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+function getCommandIcon(commandName) {
+    const icons = {
+        'menu': '📋',
+        'ping': '🏓',
+        'owner': '👑',
+        'help': '❓',
+        'antidemote': '🛡️',
+        'ban': '🔨',
+        'add': '➕',
+        'autoreact': '⚡',
+        'autoview': '👁️',
+        'status': '📊'
+    };
+    return icons[commandName] || '📌';
+}
 
 function getTotalStats() {
     try {
