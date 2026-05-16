@@ -1079,7 +1079,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
                 isForwarded: true,
                 forwardedNewsletterMessageInfo: {
                     newsletterJid: '120363404317544295@newsletter',
-                    newsletterName: 'STANYTZ',
+                    newsletterName: '✨ᴍᴅɪɴʏᴀɴᴇ ʙᴏᴛ💫',
                     serverMessageId: Date.now().toString()
                 }
             };
