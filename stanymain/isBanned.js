@@ -1,11 +1,4 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BANNED_USERS_FILE = path.join(__dirname, '..', 'banned_users.json');
-const BLOCKED_USERS_FILE = path.join(__dirname, '..', 'blocked_users.json');
+import { bannedDB, blockedDB } from '../stanydata/index.js';
 
 /**
  * Check if a user is banned or blocked
@@ -17,50 +10,21 @@ async function isBanned(userId, type = 'both') {
     try {
         if (!userId) return { isBanned: false, isBlocked: false };
         
-        const cleanId = userId.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
         let result = { isBanned: false, isBlocked: false, banInfo: null, blockInfo: null };
         
-        // Check banned users
         if (type === 'both' || type === 'banned') {
-            if (fs.existsSync(BANNED_USERS_FILE)) {
-                const data = JSON.parse(fs.readFileSync(BANNED_USERS_FILE, 'utf8'));
-                const bannedUsers = data.users || [];
-                
-                const isUserBanned = bannedUsers.some(user => {
-                    const userClean = user.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    return userClean === cleanId || user === userId;
-                });
-                
-                if (isUserBanned) {
-                    result.isBanned = true;
-                    result.banInfo = {
-                        reason: data.reason || 'No reason provided',
-                        bannedAt: data.bannedAt || new Date().toISOString(),
-                        bannedBy: data.bannedBy || 'system'
-                    };
-                }
+            const banned = bannedDB.isBanned(userId);
+            if (banned.isBanned) {
+                result.isBanned = true;
+                result.banInfo = banned.data;
             }
         }
         
-        // Check blocked users
         if (type === 'both' || type === 'blocked') {
-            if (fs.existsSync(BLOCKED_USERS_FILE)) {
-                const data = JSON.parse(fs.readFileSync(BLOCKED_USERS_FILE, 'utf8'));
-                const blockedUsers = data.users || [];
-                
-                const isUserBlocked = blockedUsers.some(user => {
-                    const userClean = user.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    return userClean === cleanId || user === userId;
-                });
-                
-                if (isUserBlocked) {
-                    result.isBlocked = true;
-                    result.blockInfo = {
-                        reason: data.reason || 'No reason provided',
-                        blockedAt: data.blockedAt || new Date().toISOString(),
-                        blockedBy: data.blockedBy || 'system'
-                    };
-                }
+            const blocked = blockedDB.isBlocked(userId);
+            if (blocked.isBlocked) {
+                result.isBlocked = true;
+                result.blockInfo = blocked.data;
             }
         }
         
@@ -80,28 +44,7 @@ async function isBanned(userId, type = 'both') {
  * @returns {Promise<boolean>} Success status
  */
 async function banUser(userId, reason = 'No reason', bannedBy = 'system') {
-    try {
-        let data = { users: [], reason: '', bannedAt: '', bannedBy: '' };
-        
-        if (fs.existsSync(BANNED_USERS_FILE)) {
-            data = JSON.parse(fs.readFileSync(BANNED_USERS_FILE, 'utf8'));
-        }
-        
-        const cleanId = userId.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-        if (!data.users.includes(userId) && !data.users.includes(cleanId)) {
-            data.users.push(userId);
-            data.reason = reason;
-            data.bannedAt = new Date().toISOString();
-            data.bannedBy = bannedBy;
-            fs.writeFileSync(BANNED_USERS_FILE, JSON.stringify(data, null, 2));
-        }
-        
-        return true;
-    }
-    catch (err) {
-        console.error('❌ Error banning user:', err);
-        return false;
-    }
+    return bannedDB.add(userId, reason, bannedBy);
 }
 
 /**
@@ -110,24 +53,27 @@ async function banUser(userId, reason = 'No reason', bannedBy = 'system') {
  * @returns {Promise<boolean>} Success status
  */
 async function unbanUser(userId) {
-    try {
-        if (!fs.existsSync(BANNED_USERS_FILE)) return false;
-        
-        const data = JSON.parse(fs.readFileSync(BANNED_USERS_FILE, 'utf8'));
-        const cleanId = userId.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-        
-        data.users = data.users.filter(user => {
-            const userClean = user.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            return userClean !== cleanId && user !== userId;
-        });
-        
-        fs.writeFileSync(BANNED_USERS_FILE, JSON.stringify(data, null, 2));
-        return true;
-    }
-    catch (err) {
-        console.error('❌ Error unbanning user:', err);
-        return false;
-    }
+    return bannedDB.remove(userId);
 }
 
-export { isBanned as default, banUser, unbanUser };
+/**
+ * Block a user
+ * @param {string} userId - User ID to block
+ * @param {string} reason - Block reason
+ * @param {string} blockedBy - Who blocked the user
+ * @returns {Promise<boolean>} Success status
+ */
+async function blockUser(userId, reason = 'No reason', blockedBy = 'system') {
+    return blockedDB.add(userId, reason, blockedBy);
+}
+
+/**
+ * Unblock a user
+ * @param {string} userId - User ID to unblock
+ * @returns {Promise<boolean>} Success status
+ */
+async function unblockUser(userId) {
+    return blockedDB.remove(userId);
+}
+
+export { isBanned as default, banUser, unbanUser, blockUser, unblockUser };
