@@ -1078,7 +1078,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
                 forwardingScore: 999,
                 isForwarded: true,
                 forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363387517081911@newsletter',
+                    newsletterJid: '120363404317544295@newsletter',
                     newsletterName: 'STANYTZ',
                     serverMessageId: Date.now().toString()
                 }
