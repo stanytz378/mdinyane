@@ -16,10 +16,6 @@ const MUTE_FILE = path.join(DATA_DIR, 'muted_users.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(MUTE_FILE)) fs.writeFileSync(MUTE_FILE, JSON.stringify({}, null, 2));
 
-// ============================================================
-// GET TARGET USER ID (Reply, Tag, or Number)
-// ============================================================
-
 function getTargetId(msg, args) {
     const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
     if (quotedMsg) {
@@ -28,23 +24,16 @@ function getTargetId(msg, args) {
         if (quotedMsg.key?.participant) return quotedMsg.key.participant;
         if (quotedMsg.key?.remoteJid) return quotedMsg.key.remoteJid;
     }
-    
     if (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid) {
         const mentioned = msg.message.extendedTextMessage.contextInfo.mentionedJid[0];
         if (mentioned) return mentioned;
     }
-    
     const number = args[0]?.trim();
     if (number && number.match(/^[0-9]{10,15}$/)) {
         return `${number}@s.whatsapp.net`;
     }
-    
     return null;
 }
-
-// ============================================================
-// MUTE FUNCTIONS
-// ============================================================
 
 async function getMutedUsers(chatId) {
     try {
@@ -137,10 +126,10 @@ async function getMuteInfo(chatId, userId) {
 }
 
 // ============================================================
-// MESSAGE HANDLER (Delete muted user messages)
+// MAIN HANDLER - Using the name expected by index.js
 // ============================================================
 
-async function handleMutedMessage(sock, chatId, senderId, message) {
+async function handleMutedMessages(sock, chatId, senderId, message) {
     try {
         const isMuted = await isUserMuted(chatId, senderId);
         if (!isMuted) return false;
@@ -201,10 +190,6 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
         await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
     }
 }
-
-// ============================================================
-// MAIN COMMAND
-// ============================================================
 
 export default {
     name: 'mute',
@@ -418,5 +403,8 @@ _📌 Welcome back!_
     }
 };
 
-// SINGLE EXPORT - NO DUPLICATES!
-export { handleMutedMessage, isUserMuted, removeMutedUser };
+// ============================================================
+// EXPORTS - Using the names expected by index.js
+// ============================================================
+
+export { handleMutedMessages, isUserMuted, removeMutedUser };
