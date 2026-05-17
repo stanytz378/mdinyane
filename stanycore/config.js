@@ -1,7 +1,3 @@
-/*****************************************************************************
- *                     Developed By STANY TZ                                 *
- *****************************************************************************/
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -22,14 +18,18 @@ const defaultConfig = {
     prefixless: false,
     mode: 'public',
     sessionId: '',
-    autoTyping: false,
+    // Auto Typing
+    autoTyping: true,
     autoTypingLocation: 'both',
+    // Auto Recording
     autoRecording: false,
     autoRecordingLocation: 'both',
+    // Auto Read
     autoRead: false,
     autoReadGroups: true,
     autoReadPrivate: true,
-    alwaysOnline: false,
+    // Always Online
+    alwaysOnline: true,
     updatedAt: new Date().toISOString()
 };
 
