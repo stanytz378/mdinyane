@@ -1,12 +1,19 @@
 /*****************************************************************************
  *                     Developed By STANY TZ                                 *
+ *                                                                           *
+ *  🌐  GitHub   : https://github.com/Stanytz378/iamlegendv2                 *
+ *  ▶️  YouTube  : https://youtube.com/@STANYTZ                              *
+ *  💬  WhatsApp : https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p     *
+ *                                                                           *
+ *    © 2026 STANY TZ. All rights reserved.                                 *
+ *                                                                           *
  *****************************************************************************/
 
 import { config } from '../config.js';
 
 const readReceipts = new Set();
 
-async function handleAutoRead(sock, message) {
+export async function handleAutoRead(sock, message) {
     try {
         if (!config.autoRead) return;
         
@@ -29,5 +36,3 @@ async function handleAutoRead(sock, message) {
         // Silent fail
     }
 }
-
-export { handleAutoRead };
