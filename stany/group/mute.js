@@ -140,7 +140,7 @@ async function getMuteInfo(chatId, userId) {
 // MESSAGE HANDLER (Delete muted user messages)
 // ============================================================
 
-export async function handleMutedMessages(sock, chatId, senderId, message) {
+async function handleMutedMessage(sock, chatId, senderId, message) {
     try {
         const isMuted = await isUserMuted(chatId, senderId);
         if (!isMuted) return false;
@@ -236,7 +236,6 @@ export default {
             return;
         }
         
-        // Get target using reply, tag, or number
         let targetId = getTargetId(msg, args);
         
         if (!targetId) {
@@ -259,36 +258,24 @@ export default {
 │ 🔹 1d = 1 day
 │ 🔹 permanent = Forever
 ╰──────❍
-╭─┴─❍「 *📝 EXAMPLES* 」❍
-│ 🔧 ${currentPrefix}mute 5m Spamming
-│ 🔧 ${currentPrefix}mute @user 2h Bad words
-│ 🔧 ${currentPrefix}mute permanent Abuse
-╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, helpMsg, [], msg);
             return;
         }
         
-        // Check if trying to mute owner
         const ownerNumber = jidManager?.owner?.cleanNumber;
         const targetNumber = targetId.split('@')[0];
         if (targetNumber === ownerNumber) {
-            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍
-├ ❌ Cannot mute the bot owner!
-╰──────❍`, [], msg);
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍\n├ ❌ Cannot mute the bot owner!\n╰──────❍`, [], msg);
             return;
         }
         
-        // Check if trying to mute self
         if (targetId === senderId) {
-            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍
-├ ❌ You cannot mute yourself!
-╰──────❍`, [], msg);
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍\n├ ❌ You cannot mute yourself!\n╰──────❍`, [], msg);
             return;
         }
         
-        // Parse duration and reason
         let duration = 0;
         let durationUnit = 'minutes';
         let durationText = '';
@@ -337,7 +324,6 @@ export default {
         const reason = args.slice(reasonStartIndex).join(' ') || 'Violating group rules';
         const now = moment().tz('Africa/Dar_es_Salaam');
         
-        // Check if already muted
         const alreadyMuted = await isUserMuted(chatId, targetId);
         if (alreadyMuted) {
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍
@@ -350,9 +336,7 @@ export default {
         const result = await addMutedUser(chatId, targetId, reason, duration, senderId, durationUnit);
         
         if (!result.success) {
-            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍
-├ ❌ Failed to mute user
-╰──────❍`, [], msg);
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍\n├ ❌ Failed to mute user\n╰──────❍`, [], msg);
             return;
         }
         
@@ -377,7 +361,6 @@ ${expiryText}
 _📌 Muted user cannot send messages until mute expires_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [targetId, senderId], msg);
         
-        // Notify the muted user (menu.js style)
         try {
             let timeInfo = '';
             if (result.expiresAt) {
@@ -400,7 +383,6 @@ _📌 You cannot send messages in the group until mute expires_
             await sock.sendMessage(targetId, { text: notifyMsg });
         } catch (e) {}
         
-        // Schedule unmute notification
         if (result.expiresAt) {
             const expiresAt = new Date(result.expiresAt);
             const timeUntilExpiry = expiresAt - new Date();
@@ -436,4 +418,5 @@ _📌 Welcome back!_
     }
 };
 
-export { handleMutedMessages, isUserMuted, removeMutedUser };
+// SINGLE EXPORT - NO DUPLICATES!
+export { handleMutedMessage, isUserMuted, removeMutedUser };
