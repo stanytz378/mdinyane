@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: mdinyane-bot
+    runtime: node
+    repo: https://github.com/stanytz378/mdinyane
+    branch: main
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: SESSION_ID
+        sync: false
+      - key: OWNER_NUMBER
+        sync: false
+      - key: OWNER_NAME
+        value: STANY TZ
+      - key: BOT_NAME
+        value: MDINYANE
+      - key: NODE_ENV
+        value: production
+    autoDeploy: true
+    plan: free
