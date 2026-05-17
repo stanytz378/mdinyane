@@ -76,7 +76,7 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
 }
 
 // ============================================================
-// ANTICALL STATE FUNCTIONS
+// DATABASE FUNCTIONS
 // ============================================================
 
 async function readState() {
@@ -102,7 +102,7 @@ async function writeState(enabled) {
 }
 
 // ============================================================
-// CALL HANDLER (for index.js)
+// CALL HANDLER - SINGLE EXPORT
 // ============================================================
 
 export async function handleCall(sock, calls) {
@@ -116,7 +116,6 @@ export async function handleCall(sock, calls) {
             const callerJid = call.from || call.peerJid || call.chatId;
             if (!callerJid) continue;
             
-            // Check if already blocked in this session
             if (blockedCallers.has(callerJid)) continue;
             
             try {
@@ -127,18 +126,20 @@ export async function handleCall(sock, calls) {
                     await sock.sendCallOfferAck(call.id, callerJid, 'reject');
                 }
                 
+                const randomQuote = getRandomQuote();
+                
                 // Send warning message
-                await sock.sendMessage(callerJid, {
-                    text: `╭──❍「 *📵 ANTICALL PROTECTION* 」❍
-├ 🔔 *Call* : Rejected
-├ 🚫 *Status* : You have been blocked
-├ 📝 *Reason* : Anti-call system is enabled
+                await sendStyledMessage(sock, callerJid, 
+                    `╭──❍「 *📵 ANTICALL* 」❍
+├ 🔔 Call rejected
+├ 🚫 You have been blocked
+├ 📝 Anti-call system is enabled
 ╰──────❍
 
+✨ *"${randomQuote}"* ✨
+
 _📌 This bot does not accept calls. Please text instead._
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`,
-                    contextInfo: channelInfo.contextInfo
-                });
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, []);
                 
                 // Block the caller
                 await sock.updateBlockStatus(callerJid, 'block');
@@ -156,7 +157,7 @@ _📌 This bot does not accept calls. Please text instead._
 }
 
 // ============================================================
-// MAIN COMMAND
+// COMMAND HANDLER
 // ============================================================
 
 export default {
@@ -176,8 +177,8 @@ export default {
         const ownerCheck = await isOwner(senderId, jidManager);
         if (!ownerCheck.isOwner) {
             const notAuthMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Owner only command!
+├ 👤 @${senderId.split('@')[0]}
+├ ❌ Owner only command!
 ╰──────❍
 
 _📌 This command is only for bot owner_
@@ -203,25 +204,25 @@ _📌 This command is only for bot owner_
             const statusIcon = state.enabled ? '✅' : '❌';
             const statusText = state.enabled ? 'ENABLED' : 'DISABLED';
             
-            const statusMsg = `╭──❍「 *📵 ANTICALL PROTECTION* 」❍
-├ 📵 *Status* : ${statusIcon} ${statusText}
-├ 💾 *Storage* : File System
+            const statusMsg = `╭──❍「 *📵 ANTICALL* 」❍
+├ 📵 Status : ${statusIcon} ${statusText}
+├ 💾 Storage : File System
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${currentPrefix}anticall on - Enable anticall
-│ 🔧 ${currentPrefix}anticall off - Disable anticall
+│ 🔧 ${currentPrefix}anticall on - Enable
+│ 🔧 ${currentPrefix}anticall off - Disable
 │ 🔧 ${currentPrefix}anticall status - Show status
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
-├ 📅 *Date* : ${date}
-├ 📆 *Day* : ${day}
-├ ⏰ *Time* : ${time} EAT
-├ 🔒 *Effect* : Calls rejected & caller blocked
+├ 📅 ${date}
+├ 📆 ${day}
+├ ⏰ ${time} EAT
+├ 🔒 Calls rejected & caller blocked
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 When enabled, all incoming calls will be rejected and callers will be blocked_
+_📌 All incoming calls will be rejected and callers blocked_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, statusMsg, [], msg);
             return;
@@ -231,8 +232,7 @@ _📌 When enabled, all incoming calls will be rejected and callers will be bloc
         if (action === 'on') {
             if (state.enabled) {
                 const alreadyMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ ⚠️ *Status* : Already ENABLED
-├ 📝 *Note* : Anti-call is already active
+├ ⚠️ Already ENABLED
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -243,14 +243,14 @@ _📌 When enabled, all incoming calls will be rejected and callers will be bloc
             await writeState(true);
             
             const enableMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ ✅ *Status* : ENABLED
-├ 📝 *Effect* : Incoming calls will be rejected
-├ 🚫 *Action* : Callers will be blocked
+├ ✅ ENABLED
+├ 📝 Incoming calls will be rejected
+├ 🚫 Callers will be blocked
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 All incoming calls will now be automatically rejected and the caller will be blocked_
+_📌 All incoming calls will be automatically rejected_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, enableMsg, [], msg);
             return;
@@ -260,8 +260,7 @@ _📌 All incoming calls will now be automatically rejected and the caller will 
         if (action === 'off') {
             if (!state.enabled) {
                 const alreadyOffMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ ⚠️ *Status* : Already DISABLED
-├ 📝 *Note* : Anti-call is already inactive
+├ ⚠️ Already DISABLED
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -272,8 +271,8 @@ _📌 All incoming calls will now be automatically rejected and the caller will 
             await writeState(false);
             
             const disableMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ ❌ *Status* : DISABLED
-├ 📝 *Effect* : Incoming calls will be allowed
+├ ❌ DISABLED
+├ 📝 Incoming calls will be allowed
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -283,8 +282,8 @@ _📌 All incoming calls will now be automatically rejected and the caller will 
         
         // ========== INVALID COMMAND ==========
         const invalidMsg = `╭──❍「 *📵 ANTICALL* 」❍
-├ ❌ *Invalid command* : ${action}
-├ 📝 *Use* : ${currentPrefix}anticall for help
+├ ❌ Invalid: ${action}
+├ 📝 Use: ${currentPrefix}anticall for help
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -292,5 +291,7 @@ _📌 All incoming calls will now be automatically rejected and the caller will 
     }
 };
 
-// Export for use in index.js
-export { readState, writeState, handleCall };
+// ============================================================
+// EXPORTS - NO DUPLICATES
+// ============================================================
+export { readState, writeState };
