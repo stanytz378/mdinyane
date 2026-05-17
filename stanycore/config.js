@@ -19,17 +19,21 @@ if (!fs.existsSync(DATA_DIR)) {
 const defaultConfig = {
     ownerNumber: '',
     ownerName: 'STANY TZ',
-    botName: 'MDINYANE',
-    version: '2.0.0',
     prefix: '.',
-    mode: 'public',  // public, private, self
+    mode: 'public',  // public, private, groups, self
+    sessionId: '',
+    // Auto Typing settings
     autoTyping: false,
+    autoTypingLocation: 'both',  // both, private, groups
+    // Auto Recording settings
     autoRecording: false,
+    autoRecordingLocation: 'both',  // both, private, groups
+    // Auto Read settings
     autoRead: false,
     autoReadGroups: true,
     autoReadPrivate: true,
+    // Always Online
     alwaysOnline: false,
-    antiPhone: false,
     updatedAt: new Date().toISOString()
 };
 
