@@ -24,7 +24,7 @@ const __dirname = path.dirname(__filename);
 
 // Data directory
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
-const ANTIDELETE_CONFIG_FILE = path.join(DATA_DIR, 'antidelete.json');
+const ANTIDELETE_FILE = path.join(DATA_DIR, 'antidelete.json');
 const TEMP_MEDIA_DIR = path.join(DATA_DIR, 'temp_media');
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -45,51 +45,10 @@ const QUOTES = [
     "Life is short, smile while you still have teeth.",
     "Nothing gets deleted on my watch! 👀",
     "Anti-delete is watching you! 🔍",
-    "Deleted messages? Not today! 📝",
-    "Every message is saved, every deletion is tracked!",
-    "You can run but you can't hide your deleted messages! 🏃‍♂️",
-    "Anti-delete: Because messages matter! 💬"
+    "Deleted messages? Not today! 📝"
 ];
 
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
-
-// ============================================================
-// UTILITY FUNCTIONS
-// ============================================================
-
-const getFolderSizeInMB = (folderPath) => {
-    try {
-        const files = fs.readdirSync(folderPath);
-        let totalSize = 0;
-        for (const file of files) {
-            const filePath = path.join(folderPath, file);
-            if (fs.statSync(filePath).isFile()) {
-                totalSize += fs.statSync(filePath).size;
-            }
-        }
-        return totalSize / (1024 * 1024);
-    } catch (err) {
-        return 0;
-    }
-};
-
-const cleanTempFolderIfLarge = () => {
-    try {
-        const sizeMB = getFolderSizeInMB(TEMP_MEDIA_DIR);
-        if (sizeMB > 200) {
-            const files = fs.readdirSync(TEMP_MEDIA_DIR);
-            for (const file of files) {
-                const filePath = path.join(TEMP_MEDIA_DIR, file);
-                fs.unlinkSync(filePath);
-            }
-            console.log('🧹 Temp folder cleaned (exceeded 200MB)');
-        }
-    } catch (err) {
-        console.error('Temp cleanup error:', err);
-    }
-};
-
-setInterval(cleanTempFolderIfLarge, 60 * 1000);
 
 // ============================================================
 // SEND WITH IMAGE AND FORWARDED MARK
@@ -123,13 +82,51 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
 }
 
 // ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+
+const getFolderSizeInMB = (folderPath) => {
+    try {
+        const files = fs.readdirSync(folderPath);
+        let totalSize = 0;
+        for (const file of files) {
+            const filePath = path.join(folderPath, file);
+            if (fs.statSync(filePath).isFile()) {
+                totalSize += fs.statSync(filePath).size;
+            }
+        }
+        return totalSize / (1024 * 1024);
+    } catch {
+        return 0;
+    }
+};
+
+const cleanTempFolderIfLarge = () => {
+    try {
+        const sizeMB = getFolderSizeInMB(TEMP_MEDIA_DIR);
+        if (sizeMB > 200) {
+            const files = fs.readdirSync(TEMP_MEDIA_DIR);
+            for (const file of files) {
+                const filePath = path.join(TEMP_MEDIA_DIR, file);
+                fs.unlinkSync(filePath);
+            }
+            console.log('🧹 Temp folder cleaned');
+        }
+    } catch (err) {
+        console.error('Temp cleanup error:', err);
+    }
+};
+
+setInterval(cleanTempFolderIfLarge, 60 * 1000);
+
+// ============================================================
 // CONFIG FUNCTIONS
 // ============================================================
 
 async function loadAntideleteConfig() {
     try {
-        if (fs.existsSync(ANTIDELETE_CONFIG_FILE)) {
-            return JSON.parse(fs.readFileSync(ANTIDELETE_CONFIG_FILE, 'utf8'));
+        if (fs.existsSync(ANTIDELETE_FILE)) {
+            return JSON.parse(fs.readFileSync(ANTIDELETE_FILE, 'utf8'));
         }
         return { enabled: false };
     } catch {
@@ -139,7 +136,7 @@ async function loadAntideleteConfig() {
 
 async function saveAntideleteConfig(config) {
     try {
-        fs.writeFileSync(ANTIDELETE_CONFIG_FILE, JSON.stringify(config, null, 2));
+        fs.writeFileSync(ANTIDELETE_FILE, JSON.stringify(config, null, 2));
         return true;
     } catch (error) {
         console.error('Config save error:', error);
@@ -166,7 +163,6 @@ export async function storeMessage(sock, message) {
         const sender = message.key.participant || message.key.remoteJid;
         const viewOnceContainer = message.message?.viewOnceMessageV2?.message || message.message?.viewOnceMessage?.message;
         
-        // Handle ViewOnce messages
         if (viewOnceContainer) {
             if (viewOnceContainer.imageMessage) {
                 mediaType = 'image';
@@ -192,12 +188,13 @@ export async function storeMessage(sock, message) {
                 isViewOnce = true;
             }
         }
-        // Handle regular messages
         else if (message.message?.conversation) {
             content = message.message.conversation;
-        } else if (message.message?.extendedTextMessage?.text) {
+        }
+        else if (message.message?.extendedTextMessage?.text) {
             content = message.message.extendedTextMessage.text;
-        } else if (message.message?.imageMessage) {
+        }
+        else if (message.message?.imageMessage) {
             mediaType = 'image';
             content = message.message.imageMessage.caption || '';
             const stream = await downloadContentFromMessage(message.message.imageMessage, 'image');
@@ -207,7 +204,8 @@ export async function storeMessage(sock, message) {
             }
             mediaPath = path.join(TEMP_MEDIA_DIR, `${messageId}.jpg`);
             await writeFile(mediaPath, buffer);
-        } else if (message.message?.stickerMessage) {
+        }
+        else if (message.message?.stickerMessage) {
             mediaType = 'sticker';
             const stream = await downloadContentFromMessage(message.message.stickerMessage, 'sticker');
             let buffer = Buffer.from([]);
@@ -216,7 +214,8 @@ export async function storeMessage(sock, message) {
             }
             mediaPath = path.join(TEMP_MEDIA_DIR, `${messageId}.webp`);
             await writeFile(mediaPath, buffer);
-        } else if (message.message?.videoMessage) {
+        }
+        else if (message.message?.videoMessage) {
             mediaType = 'video';
             content = message.message.videoMessage.caption || '';
             const stream = await downloadContentFromMessage(message.message.videoMessage, 'video');
@@ -226,7 +225,8 @@ export async function storeMessage(sock, message) {
             }
             mediaPath = path.join(TEMP_MEDIA_DIR, `${messageId}.mp4`);
             await writeFile(mediaPath, buffer);
-        } else if (message.message?.audioMessage) {
+        }
+        else if (message.message?.audioMessage) {
             mediaType = 'audio';
             const mime = message.message.audioMessage.mimetype || '';
             const ext = mime.includes('mpeg') ? 'mp3' : (mime.includes('ogg') ? 'ogg' : 'mp3');
@@ -239,7 +239,6 @@ export async function storeMessage(sock, message) {
             await writeFile(mediaPath, buffer);
         }
 
-        // Store in memory
         messageStore.set(messageId, {
             content,
             mediaType,
@@ -249,13 +248,20 @@ export async function storeMessage(sock, message) {
             timestamp: new Date().toISOString()
         });
 
-        // Send ViewOnce media to owner
         if (isViewOnce && mediaType && fs.existsSync(mediaPath)) {
             try {
                 const ownerNumber = `${sock.user.id.split(':')[0]}@s.whatsapp.net`;
                 const senderName = sender.split('@')[0];
+                const randomQuote = getRandomQuote();
                 const mediaOptions = {
-                    caption: `> ▰▰▰ *VIEWONCE CAPTURED* ▰▰▰\n> \n> 📱 From: @${senderName}\n> 📝 Type: ${mediaType}\n> \n> ▰▰▰ *© MDINYANE BY STANY TZ* ▰▰▰`,
+                    caption: `╭──❍「 *👁️ VIEWONCE* 」❍
+├ 📱 From: @${senderName}
+├ 📝 Type: ${mediaType}
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`,
                     mentions: [sender],
                     contextInfo: channelInfo.contextInfo
                 };
@@ -275,7 +281,7 @@ export async function storeMessage(sock, message) {
 }
 
 // ============================================================
-// HANDLE MESSAGE REVOCATION (DELETE)
+// HANDLE MESSAGE REVOCATION - SINGLE EXPORT
 // ============================================================
 
 export async function handleMessageRevocation(sock, revocationMessage) {
@@ -287,7 +293,6 @@ export async function handleMessageRevocation(sock, revocationMessage) {
         const deletedBy = revocationMessage.participant || revocationMessage.key.participant || revocationMessage.key.remoteJid;
         const ownerNumber = `${sock.user.id.split(':')[0]}@s.whatsapp.net`;
         
-        // Don't track if deleted by bot or owner
         if (deletedBy.includes(sock.user.id) || deletedBy === ownerNumber) return;
         
         const original = messageStore.get(messageId);
@@ -308,43 +313,38 @@ export async function handleMessageRevocation(sock, revocationMessage) {
         const now = moment().tz('Africa/Dar_es_Salaam');
         const time = now.format('HH:mm:ss');
         const date = now.format('DD/MM/YYYY');
+        const randomQuote = getRandomQuote();
         
-        // Build report message
-        let reportMsg = `╭──❍「 *🔰 ANTIDELETE REPORT* 」❍
-├ 🗑️ *Deleted By* : @${deletedByName}
-├ 👤 *Sender* : @${senderName}
-├ 📱 *Number* : ${sender}
-├ 🕒 *Time* : ${time}
-├ 📅 *Date* : ${date}
+        let reportMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
+├ 🗑️ Deleted By: @${deletedByName}
+├ 👤 Sender: @${senderName}
+├ 🕒 Time: ${time}
+├ 📅 Date: ${date}
 ╰─┬────❍`;
-
+        
         if (groupName) {
-            reportMsg += `\n╭─┴─❍「 *👥 GROUP INFO* 」❍
-├ 📛 *Group* : ${groupName}
+            reportMsg += `\n╭─┴─❍「 *👥 GROUP* 」❍
+├ 📛 ${groupName}
 ╰──────❍`;
         }
 
         if (original.content) {
-            reportMsg += `\n╭─┴─❍「 *💬 DELETED MESSAGE* 」❍
-├ 📝 *Content* : ${original.content.substring(0, 200)}
+            reportMsg += `\n╭─┴─❍「 *💬 MESSAGE* 」❍
+├ 📝 ${original.content.substring(0, 150)}
 ╰──────❍`;
         }
 
-        reportMsg += `\n\n✨ *"${getRandomQuote()}"* ✨\n\n▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+        reportMsg += `\n\n✨ *"${randomQuote}"* ✨\n\n▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
 
         await sendStyledMessage(sock, ownerNumber, reportMsg, [deletedBy, sender]);
 
-        // Send media if exists
         if (original.mediaType && fs.existsSync(original.mediaPath)) {
-            const mediaCaption = `> ▰▰▰ *DELETED ${original.mediaType.toUpperCase()}* ▰▰▰\n> \n> 📱 From: @${senderName}\n> \n> ▰▰▰ *© MDINYANE BY STANY TZ* ▰▰▰`;
-            
             try {
                 switch (original.mediaType) {
                     case 'image':
                         await sock.sendMessage(ownerNumber, {
                             image: { url: original.mediaPath },
-                            caption: mediaCaption,
-                            mentions: [sender],
+                            caption: `*DELETED ${original.mediaType.toUpperCase()}*`,
                             contextInfo: channelInfo.contextInfo
                         });
                         break;
@@ -357,8 +357,7 @@ export async function handleMessageRevocation(sock, revocationMessage) {
                     case 'video':
                         await sock.sendMessage(ownerNumber, {
                             video: { url: original.mediaPath },
-                            caption: mediaCaption,
-                            mentions: [sender],
+                            caption: `*DELETED ${original.mediaType.toUpperCase()}*`,
                             contextInfo: channelInfo.contextInfo
                         });
                         break;
@@ -388,7 +387,7 @@ export async function handleMessageRevocation(sock, revocationMessage) {
 }
 
 // ============================================================
-// MAIN COMMAND
+// COMMAND HANDLER
 // ============================================================
 
 export default {
@@ -404,21 +403,18 @@ export default {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        // Check if owner
         const ownerCheck = await isOwner(senderId, jidManager);
         if (!ownerCheck.isOwner) {
             const notAuthMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Owner only command!
+├ 👤 @${senderId.split('@')[0]}
+├ ❌ Owner only command!
 ╰──────❍
 
-_📌 This command is only for bot owner_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, notAuthMsg, [senderId], msg);
             return;
         }
         
-        // Get current time
         const now = moment().tz('Africa/Dar_es_Salaam');
         const date = now.format('DD/MM/YYYY');
         const day = now.format('dddd');
@@ -430,41 +426,35 @@ _📌 This command is only for bot owner_
         
         const action = args[0]?.toLowerCase();
         
-        // ========== SHOW STATUS (default) ==========
         if (!action) {
             const statusIcon = config.enabled ? '✅' : '❌';
             const statusText = config.enabled ? 'ENABLED' : 'DISABLED';
             
-            const statusMsg = `╭──❍「 *🔰 ANTIDELETE PROTECTION* 」❍
-├ 📵 *Status* : ${statusIcon} ${statusText}
-├ 💾 *Storage* : File System
+            const statusMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
+├ 📵 Status: ${statusIcon} ${statusText}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${currentPrefix}antidelete on - Enable tracking
-│ 🔧 ${currentPrefix}antidelete off - Disable tracking
+│ 🔧 ${currentPrefix}antidelete on - Enable
+│ 🔧 ${currentPrefix}antidelete off - Disable
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
-├ 📅 *Date* : ${date}
-├ 📆 *Day* : ${day}
-├ ⏰ *Time* : ${time} EAT
-├ 🔍 *Tracks* : Deleted messages & media
-├ 👁️ *ViewOnce* : Auto-saved to owner
+├ 📅 ${date}
+├ 📆 ${day}
+├ ⏰ ${time} EAT
+├ 🔍 Tracks deleted messages
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 When enabled, all deleted messages and ViewOnce media will be sent to owner_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, statusMsg, [], msg);
             return;
         }
         
-        // ========== ENABLE ==========
         if (action === 'on') {
             if (config.enabled) {
                 const alreadyMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ ⚠️ *Status* : Already ENABLED
-├ 📝 *Note* : Anti-delete is already active
+├ ⚠️ Already ENABLED
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -476,25 +466,23 @@ _📌 When enabled, all deleted messages and ViewOnce media will be sent to owne
             await saveAntideleteConfig(config);
             
             const enableMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ ✅ *Status* : ENABLED
-├ 📝 *Effect* : Tracking deleted messages
-├ 👁️ *ViewOnce* : Auto-save enabled
+├ ✅ ENABLED
+├ 📝 Tracking deleted messages
+├ 👁️ ViewOnce auto-save enabled
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 The bot will now track deleted messages and save ViewOnce media to owner_
+_📌 Deleted messages will be sent to owner_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, enableMsg, [], msg);
             return;
         }
         
-        // ========== DISABLE ==========
         if (action === 'off') {
             if (!config.enabled) {
                 const alreadyOffMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ ⚠️ *Status* : Already DISABLED
-├ 📝 *Note* : Anti-delete is already inactive
+├ ⚠️ Already DISABLED
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -506,8 +494,8 @@ _📌 The bot will now track deleted messages and save ViewOnce media to owner_
             await saveAntideleteConfig(config);
             
             const disableMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ ❌ *Status* : DISABLED
-├ 📝 *Effect* : No longer tracking deletions
+├ ❌ DISABLED
+├ 📝 No longer tracking deletions
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -515,10 +503,9 @@ _📌 The bot will now track deleted messages and save ViewOnce media to owner_
             return;
         }
         
-        // ========== INVALID COMMAND ==========
         const invalidMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
-├ ❌ *Invalid command* : ${action}
-├ 📝 *Use* : ${currentPrefix}antidelete for help
+├ ❌ Invalid: ${action}
+├ 📝 Use: ${currentPrefix}antidelete for help
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -526,5 +513,7 @@ _📌 The bot will now track deleted messages and save ViewOnce media to owner_
     }
 };
 
-// Export for use in index.js
-export { loadAntideleteConfig, saveAntideleteConfig, storeMessage, handleMessageRevocation };
+// ============================================================
+// EXPORTS - NO DUPLICATES
+// ============================================================
+export { loadAntideleteConfig, saveAntideleteConfig };
