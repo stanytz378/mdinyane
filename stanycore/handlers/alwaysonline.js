@@ -1,5 +1,12 @@
 /*****************************************************************************
  *                     Developed By STANY TZ                                 *
+ *                                                                           *
+ *  🌐  GitHub   : https://github.com/Stanytz378/iamlegendv2                 *
+ *  ▶️  YouTube  : https://youtube.com/@STANYTZ                              *
+ *  💬  WhatsApp : https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p     *
+ *                                                                           *
+ *    © 2026 STANY TZ. All rights reserved.                                 *
+ *                                                                           *
  *****************************************************************************/
 
 import { config } from '../config.js';
@@ -7,7 +14,7 @@ import { config } from '../config.js';
 let onlineInterval = null;
 let lastPresence = 0;
 
-async function handleAlwaysOnline(sock) {
+export async function handleAlwaysOnline(sock) {
     try {
         if (!config.alwaysOnline) return;
         
@@ -19,16 +26,14 @@ async function handleAlwaysOnline(sock) {
     } catch (error) {}
 }
 
-function startAlwaysOnline(sock) {
+export function startAlwaysOnline(sock) {
     if (onlineInterval) clearInterval(onlineInterval);
     onlineInterval = setInterval(() => handleAlwaysOnline(sock), 20000);
 }
 
-function stopAlwaysOnline() {
+export function stopAlwaysOnline() {
     if (onlineInterval) {
         clearInterval(onlineInterval);
         onlineInterval = null;
     }
 }
-
-export { handleAlwaysOnline, startAlwaysOnline, stopAlwaysOnline };
