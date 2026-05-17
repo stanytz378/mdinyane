@@ -607,7 +607,8 @@ class AutoGroupJoinSystem {
 const autoGroupJoinSystem = new AutoGroupJoinSystem();
 
 // ============================================================
-// ULTIMATE FIX SYSTEM & AUTO CONNECT// ============================================================
+// ULTIMATE FIX SYSTEM & AUTO CONNECT
+// ============================================================
 
 class UltimateFixSystem {
     constructor() { this.fixedJids = new Set(); this.fixApplied = false; this.restartFixAttempted = false; }
@@ -1184,7 +1185,6 @@ async function startBot(loginMode = 'pair', loginData = null) {
             
             if (store) store.addMessage(msg.key.remoteJid, msg.key.id, msg);
             
-            // Store for antidelete
             await storeMessage(sock, msg);
             
             const chatId = msg.key.remoteJid;
@@ -1192,8 +1192,10 @@ async function startBot(loginMode = 'pair', loginData = null) {
             const textMsg = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             
             // Check if user is banned
-            const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8')).catch(() => ({ users: [] }));
-            if (bannedData.users?.some(u => u.id === senderJid.split('@')[0])) return;
+            try {
+                const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8'));
+                if (bannedData.users?.some(u => u.id === senderJid.split('@')[0])) return;
+            } catch {}
             
             // Check if user is muted
             const isMuted = await handleMutedMessages(sock, chatId, senderJid, msg);
@@ -1292,9 +1294,9 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
             const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
             const successMessage = `
-┏━━━━━━━━━━━━━━━━━━━━┓
-┃🌟 WELCOME TO MDINYANE 🌟     
-┗━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃      🌟 WELCOME TO MDINYANE 🌟      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 ╭━━❲ 🔐 DEVICE STATUS ❳━━⬣
 ┃
@@ -1303,7 +1305,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  📱 *Your Number:* +${ownerInfo.ownerNumber}
 ┃  ⏰ *Time:* ${time} | 📅 ${date}
 ┃
-╰━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 📋 BOT INFO ❳━━⬣
 ┃
@@ -1312,7 +1314,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  👑 *Owner:* STANY TZ
 ┃  🚀 *Status:* ONLINE 24/7
 ┃
-╰━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 🎯 QUICK START ❳━━⬣
 ┃
@@ -1320,7 +1322,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  📢 \`${prefixDisplay}owner\` - Contact owner
 ┃  📸 \`${prefixDisplay}sticker\` - Convert to sticker
 ┃
-╰━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 🔔 IMPORTANT ❳━━⬣
 ┃
@@ -1329,11 +1331,11 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  ⚠️ *Note:* Bot may take few seconds to respond
 ┃  💡 Type \`${prefixDisplay}help\` for detailed guide
 ┃
-╰━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
-┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃🎉 THANK YOU FOR CHOOSING US 🎉   
-┗━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   🎉 THANK YOU FOR CHOOSING US 🎉   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 > *MDINYANE - WhatsApp Bot | ᴾᵒʷᵉʳᵉᵈ ᵇʸ ˢᵀᴬᴺʸ ᵀᶻ*
             `.trim();
