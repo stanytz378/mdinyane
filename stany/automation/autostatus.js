@@ -31,7 +31,7 @@ if (!fs.existsSync(AUTO_STATUS_FILE)) {
     fs.writeFileSync(AUTO_STATUS_FILE, JSON.stringify({
         enabled: false,
         reactOn: false,
-        likeOn: false
+        likeOn: true
     }, null, 2));
 }
 
@@ -45,13 +45,7 @@ const LIKE_EMOJIS = [
     '🔱', '⚡', '💎', '👑', '⭐', '🌹', '🌸', '💐', '🍀', '🌈'
 ];
 
-const REACTION_EMOJIS = [
-    '❤️', '🔥', '👍', '💯', '✨', '🌟', '💖', '💗', '😍', '🥰',
-    '👏', '🙌', '🤗', '😎', '👌', '💪', '🎉', '🏆', '🔱', '⚡'
-];
-
 const getRandomLikeEmoji = () => LIKE_EMOJIS[Math.floor(Math.random() * LIKE_EMOJIS.length)];
-const getRandomReactionEmoji = () => REACTION_EMOJIS[Math.floor(Math.random() * REACTION_EMOJIS.length)];
 
 // ============================================================
 // QUOTES
@@ -63,11 +57,7 @@ const QUOTES = [
     "Status viewer mode: ACTIVE",
     "Keeping up with your stories! 📸",
     "Bot is lurking on statuses... 👻",
-    "Auto view is better than manual!",
-    "Never miss a status again!",
-    "Status? I see everything! 🔭",
-    "Liking statuses like a boss! 👑",
-    "Spreading love with random emojis! 💖"
+    "Liking statuses like a boss! 👑"
 ];
 
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
@@ -112,7 +102,7 @@ async function readConfig() {
         const data = fs.readFileSync(AUTO_STATUS_FILE, 'utf8');
         return JSON.parse(data);
     } catch (error) {
-        return { enabled: false, reactOn: false, likeOn: false };
+        return { enabled: false, reactOn: false, likeOn: true };
     }
 }
 
@@ -142,7 +132,7 @@ async function isStatusLikeEnabled() {
 }
 
 // ============================================================
-// REAL LIKE FUNCTION (Sends actual like to status)
+// REAL LIKE FUNCTION
 // ============================================================
 
 async function likeStatus(sock, statusKey) {
@@ -152,7 +142,6 @@ async function likeStatus(sock, statusKey) {
         
         const randomEmoji = getRandomLikeEmoji();
         
-        // Send real reaction (like) to status
         await sock.relayMessage('status@broadcast', {
             reactionMessage: {
                 key: {
@@ -177,44 +166,6 @@ async function likeStatus(sock, statusKey) {
 }
 
 // ============================================================
-// REACTION FUNCTION (Optional - can be used alongside like)
-// ============================================================
-
-async function reactToStatus(sock, statusKey) {
-    try {
-        const reactEnabled = await isStatusReactionEnabled();
-        if (!reactEnabled) return false;
-        
-        // Don't react if like is already sent (avoid double)
-        const likeEnabled = await isStatusLikeEnabled();
-        if (likeEnabled) return false;
-        
-        const randomEmoji = getRandomReactionEmoji();
-        
-        await sock.relayMessage('status@broadcast', {
-            reactionMessage: {
-                key: {
-                    remoteJid: 'status@broadcast',
-                    id: statusKey.id,
-                    participant: statusKey.participant || statusKey.remoteJid,
-                    fromMe: false
-                },
-                text: randomEmoji
-            }
-        }, {
-            messageId: statusKey.id,
-            statusJidList: [statusKey.remoteJid, statusKey.participant || statusKey.remoteJid]
-        });
-        
-        console.log(`✅ Reacted to status with ${randomEmoji}`);
-        return true;
-    } catch (error) {
-        console.error('❌ Error reacting to status:', error.message);
-        return false;
-    }
-}
-
-// ============================================================
 // MAIN HANDLER
 // ============================================================
 
@@ -223,12 +174,10 @@ export async function handleStatusUpdate(sock, status) {
         const enabled = await isAutoStatusEnabled();
         if (!enabled) return;
         
-        // Wait a bit before interacting
         await new Promise(resolve => setTimeout(resolve, 2000));
         
         let statusKey = null;
         
-        // Extract status key from different possible formats
         if (status.messages && status.messages.length > 0) {
             const msg = status.messages[0];
             if (msg.key && msg.key.remoteJid === 'status@broadcast') {
@@ -246,7 +195,6 @@ export async function handleStatusUpdate(sock, status) {
         
         if (!statusKey) return;
         
-        // View the status (mark as seen)
         try {
             await sock.readMessages([statusKey]);
             console.log('✅ Viewed status');
@@ -259,13 +207,7 @@ export async function handleStatusUpdate(sock, status) {
             }
         }
         
-        // Send real LIKE to status (if enabled)
         await likeStatus(sock, statusKey);
-        
-        // Send reaction (if enabled and like is disabled)
-        if (!(await isStatusLikeEnabled())) {
-            await reactToStatus(sock, statusKey);
-        }
         
     } catch (error) {
         console.error('❌ Error in auto status view:', error.message);
@@ -273,24 +215,27 @@ export async function handleStatusUpdate(sock, status) {
 }
 
 // ============================================================
-// COMMAND
+// COMMAND - Fixed Owner Check
 // ============================================================
 
 export default {
     name: 'autostatus',
-    description: 'Automatically view, like and react to WhatsApp statuses',
+    description: 'Automatically view and like WhatsApp statuses',
     icon: '👁️',
     alias: ['autoview', 'statusview', 'astatus', 'autolike'],
     category: 'automation',
-    ownerOnly: true,
+    ownerOnly: true,  // This property should be respected by the command handler
     
     async execute(sock, msg, args, currentPrefix, { BOT_NAME, VERSION, isOwner, jidManager }) {
         
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        // Check if owner
+        // ============================================================
+        // FIX: Proper owner check using isOwner function
+        // ============================================================
         const ownerCheck = await isOwner(senderId, jidManager);
+        
         if (!ownerCheck.isOwner) {
             const notAuthMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
@@ -332,8 +277,6 @@ _📌 This command is only for bot owner_
 │ 🔧 ${currentPrefix}autostatus off - Disable auto view
 │ 🔧 ${currentPrefix}autostatus like on - Enable auto like
 │ 🔧 ${currentPrefix}autostatus like off - Disable auto like
-│ 🔧 ${currentPrefix}autostatus react on - Enable auto react
-│ 🔧 ${currentPrefix}autostatus react off - Disable auto react
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 *Date* : ${date}
@@ -344,7 +287,7 @@ _📌 This command is only for bot owner_
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Bot will automatically view, like and react to statuses with random emojis!_
+_📌 Bot will automatically view and like statuses with random emojis!_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, statusMsg, [], msg);
             return;
@@ -362,7 +305,7 @@ _📌 Bot will automatically view, like and react to statuses with random emojis
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Auto Like: ${config.likeOn ? 'ON' : 'OFF'} | Auto React: ${config.reactOn ? 'ON' : 'OFF'}_
+_📌 Auto Like: ${config.likeOn ? 'ON' : 'OFF'}_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, successMsg, [], msg);
             return;
@@ -401,7 +344,6 @@ _📌 Enable or disable real likes to statuses with random emojis_
             
             if (likeAction === 'on') {
                 config.likeOn = true;
-                config.reactOn = false; // Disable reaction when like is on
                 await writeConfig(config);
                 
                 const likeOnMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
@@ -430,53 +372,6 @@ _📌 Example emojis: ❤️ 🔥 👍 💯 ✨_
             return;
         }
         
-        // ========== REACTION COMMANDS ==========
-        if (action === 'react') {
-            const reactAction = args[1]?.toLowerCase();
-            
-            if (!reactAction || (reactAction !== 'on' && reactAction !== 'off')) {
-                const usageMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Usage* : ${currentPrefix}autostatus react on|off
-├ 📝 *Example* : ${currentPrefix}autostatus react on
-╰──────❍
-
-_📌 Enable or disable reactions to statuses (only when auto like is OFF)_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, usageMsg, [], msg);
-                return;
-            }
-            
-            if (reactAction === 'on') {
-                config.reactOn = true;
-                config.likeOn = false; // Disable like when reaction is on
-                await writeConfig(config);
-                
-                const reactOnMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ 💫 *Auto React* : ENABLED
-├ 📝 *Bot will react to statuses with random emojis*
-├ 🎲 *Emojis* : ${REACTION_EMOJIS.slice(0, 5).join(', ')}...
-╰──────❍
-
-✨ *"${randomQuote}"* ✨
-
-_📌 Example emojis: ❤️ 🔥 👍 💯 ✨_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, reactOnMsg, [], msg);
-            } else {
-                config.reactOn = false;
-                await writeConfig(config);
-                
-                const reactOffMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Auto React* : DISABLED
-├ 📝 *Bot will not react to statuses*
-╰──────❍
-
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, reactOffMsg, [], msg);
-            }
-            return;
-        }
-        
         // ========== INVALID COMMAND ==========
         const invalidMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
 ├ ❌ *Invalid command* : ${action}
@@ -494,9 +389,7 @@ export {
     isStatusReactionEnabled, 
     isStatusLikeEnabled,
     likeStatus,
-    reactToStatus, 
     readConfig, 
     writeConfig,
-    getRandomLikeEmoji,
-    getRandomReactionEmoji
+    getRandomLikeEmoji
 };
