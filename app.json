@@ -1,0 +1,90 @@
+{
+  "name": "MDINYANE WhatsApp Bot",
+  "description": "MDINYANE WhatsApp Bot - Developed by STANY TZ",
+  "version": "2.0.0",
+  "repository": "https://github.com/stanytz378/mdinyane",
+  "logo": "https://avatars.githubusercontent.com/u/stanytz378",
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "mdinyane",
+    "stanytz",
+    "baileys"
+  ],
+  "env": {
+    "SESSION_ID": {
+      "description": "Your session ID (REQUIRED) - Format: Stanytz378/iamlegendv2_<pasteId>",
+      "value": "",
+      "required": true
+    },
+    "OWNER_NUMBER": {
+      "description": "Your WhatsApp number with country code (without +)",
+      "value": "255787079580",
+      "required": true
+    },
+    "OWNER_NAME": {
+      "description": "Your name",
+      "value": "STANY TZ",
+      "required": false
+    },
+    "BOT_NAME": {
+      "description": "Name of the bot",
+      "value": "MDINYANE",
+      "required": false
+    },
+    "PREFIX": {
+      "description": "Command prefix (can use multiple: .,!,/,$)",
+      "value": ".",
+      "required": false
+    },
+    "BOT_MODE": {
+      "description": "Bot mode: public, private, groups, self",
+      "value": "public",
+      "required": false
+    },
+    "AUTO_TYPING": {
+      "description": "Enable auto typing indicator (true/false)",
+      "value": "false",
+      "required": false
+    },
+    "AUTO_RECORDING": {
+      "description": "Enable auto recording indicator (true/false)",
+      "value": "false",
+      "required": false
+    },
+    "AUTO_READ": {
+      "description": "Enable auto read messages (true/false)",
+      "value": "false",
+      "required": false
+    },
+    "ALWAYS_ONLINE": {
+      "description": "Keep bot online 24/7 (true/false)",
+      "value": "false",
+      "required": false
+    },
+    "NODE_ENV": {
+      "description": "Environment",
+      "value": "production",
+      "required": false
+    }
+  },
+  "stack": "container",
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
