@@ -159,7 +159,7 @@ function getCategoryIcon(category) {
         'ai': '🤖',
         'games': '🎲'
     };
-    return icons[category.toLowerCase()] || '📁';
+    return icons[category.toLowerCase()] || '🧛';
 }
 
 // ============================================================
@@ -275,7 +275,7 @@ export default {
             for (let i = 0; i < topCommands.length; i++) {
                 const cmd = topCommands[i];
                 // Find icon for top command
-                let icon = '📌';
+                let icon = '🀄️';
                 for (const [category, commands] of commandsByCategory) {
                     const found = commands.find(c => c.name === cmd.name);
                     if (found && found.icon) {
