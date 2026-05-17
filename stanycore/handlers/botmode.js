@@ -1,3 +1,14 @@
+/*****************************************************************************
+ *                     Developed By STANY TZ                                 *
+ *                                                                           *
+ *  🌐  GitHub   : https://github.com/Stanytz378/iamlegendv2                 *
+ *  ▶️  YouTube  : https://youtube.com/@STANYTZ                              *
+ *  💬  WhatsApp : https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p     *
+ *                                                                           *
+ *    © 2026 STANY TZ. All rights reserved.                                 *
+ *                                                                           *
+ *****************************************************************************/
+
 import { config } from '../config.js';
 
 export function isChatAllowed(chatId, senderId, isOwner) {
