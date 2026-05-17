@@ -1,0 +1,81 @@
+import axios from 'axios';
+import { channelInfo } from '../../stanytz/messageConfig.js';
+
+export default {
+    name: 'shorten',
+    description: 'Shorten a long URL',
+    icon: '🔗',
+    alias: ['shorturl', 'urlshort', 'tinyurl'],
+    category: 'general',
+    
+    async execute(sock, msg, args, currentPrefix) {
+        const chatId = msg.key.remoteJid;
+        const url = args[0];
+        
+        if (!url) {
+            await sock.sendMessage(chatId, {
+                text: `╭──❍「 *🔗 URL SHORTENER* 」❍
+├ 📝 Usage: ${currentPrefix}shorten <url>
+├ 📝 Example: ${currentPrefix}shorten https://github.com/stanytz378/mdinyane
+├ 📝 Example: ${currentPrefix}shorten https://youtube.com/@STANYTZ
+╰──────❍`,
+                contextInfo: channelInfo.contextInfo
+            }, { quoted: msg });
+            return;
+        }
+        
+        // Validate URL
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            await sock.sendMessage(chatId, {
+                text: `╭──❍「 *🔗 URL SHORTENER* 」❍
+├ ❌ Invalid URL
+├ 📝 URL must start with http:// or https://
+╰──────❍`,
+                contextInfo: channelInfo.contextInfo
+            }, { quoted: msg });
+            return;
+        }
+        
+        try {
+            // Try TinyURL API first
+            const response = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`);
+            const shortUrl = response.data;
+            
+            await sock.sendMessage(chatId, {
+                text: `╭──❍「 *🔗 URL SHORTENER* 」❍
+├ 🔗 *Original URL* : ${url.substring(0, 60)}${url.length > 60 ? '...' : ''}
+├ 📏 *Original Length* : ${url.length} chars
+├ 🔗 *Shortened URL* : ${shortUrl}
+├ 📏 *Short Length* : ${shortUrl.length} chars
+├ 💾 *Saved* : ${url.length - shortUrl.length} characters
+╰──────❍
+_📌 Click the shortened link to visit_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`,
+                contextInfo: channelInfo.contextInfo
+            }, { quoted: msg });
+        } catch (error) {
+            // Fallback: Use is.gd API
+            try {
+                const fallbackResponse = await axios.get(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`);
+                const shortUrl = fallbackResponse.data;
+                
+                await sock.sendMessage(chatId, {
+                    text: `╭──❍「 *🔗 URL SHORTENER* 」❍
+├ 🔗 *Original* : ${url.substring(0, 50)}${url.length > 50 ? '...' : ''}
+├ 🔗 *Shortened* : ${shortUrl}
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`,
+                    contextInfo: channelInfo.contextInfo
+                }, { quoted: msg });
+            } catch (fallbackError) {
+                await sock.sendMessage(chatId, {
+                    text: `╭──❍「 *🔗 URL SHORTENER* 」❍
+├ ❌ Failed to shorten URL
+├ 📝 Please try again later
+╰──────❍`,
+                    contextInfo: channelInfo.contextInfo
+                }, { quoted: msg });
+            }
+        }
+    }
+};
