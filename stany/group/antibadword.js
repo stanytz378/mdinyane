@@ -25,14 +25,13 @@ const __dirname = path.dirname(__filename);
 // Data directory
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTIBADWORD_FILE = path.join(DATA_DIR, 'antibadword_settings.json');
-const WARNINGS_FILE = path.join(DATA_DIR, 'antibadword_warnings.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 // ============================================================
-// DEFAULT BAD WORDS (Common profanity)
+// DEFAULT BAD WORDS
 // ============================================================
 const DEFAULT_BAD_WORDS = [
     "fuck", "shit", "damn", "hell", "ass", "bitch", "bastard", "crap", "piss",
@@ -56,62 +55,6 @@ const QUOTES = [
 ];
 
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
-
-// ============================================================
-// DATABASE FUNCTIONS
-// ============================================================
-
-async function loadDatabase(filePath, defaultData = {}) {
-    try {
-        if (fs.existsSync(filePath)) {
-            return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        }
-        return defaultData;
-    } catch {
-        return defaultData;
-    }
-}
-
-async function saveDatabase(filePath, data) {
-    try {
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-async function getAntibadwordSettings(chatId) {
-    const settings = await loadDatabase(ANTIBADWORD_FILE, {});
-    return settings[chatId] || { enabled: false, words: DEFAULT_BAD_WORDS };
-}
-
-async function saveAntibadwordSettings(chatId, settings) {
-    const allSettings = await loadDatabase(ANTIBADWORD_FILE, {});
-    allSettings[chatId] = settings;
-    await saveDatabase(ANTIBADWORD_FILE, allSettings);
-}
-
-async function getWarnings(chatId, userId) {
-    const warns = await loadDatabase(WARNINGS_FILE, {});
-    return warns[chatId]?.[userId] || 0;
-}
-
-async function addWarning(chatId, userId) {
-    const warns = await loadDatabase(WARNINGS_FILE, {});
-    if (!warns[chatId]) warns[chatId] = {};
-    warns[chatId][userId] = (warns[chatId][userId] || 0) + 1;
-    await saveDatabase(WARNINGS_FILE, warns);
-    return warns[chatId][userId];
-}
-
-async function resetWarnings(chatId, userId) {
-    const warns = await loadDatabase(WARNINGS_FILE, {});
-    if (warns[chatId]) {
-        delete warns[chatId][userId];
-        await saveDatabase(WARNINGS_FILE, warns);
-    }
-}
 
 // ============================================================
 // SEND WITH IMAGE AND FORWARDED MARK
@@ -145,7 +88,61 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
 }
 
 // ============================================================
-// BADWORD DETECTION HANDLER
+// DATABASE FUNCTIONS
+// ============================================================
+
+async function loadDatabase() {
+    try {
+        if (fs.existsSync(ANTIBADWORD_FILE)) {
+            return JSON.parse(fs.readFileSync(ANTIBADWORD_FILE, 'utf8'));
+        }
+        return {};
+    } catch {
+        return {};
+    }
+}
+
+async function saveDatabase(data) {
+    try {
+        fs.writeFileSync(ANTIBADWORD_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch (error) {
+        console.error('Error saving antibadword config:', error);
+        return false;
+    }
+}
+
+async function getAntibadwordSettings(chatId) {
+    const data = await loadDatabase();
+    const setting = data[chatId];
+    if (setting && typeof setting === 'object') {
+        return {
+            enabled: setting.enabled || false,
+            words: Array.isArray(setting.words) ? setting.words : [...DEFAULT_BAD_WORDS]
+        };
+    }
+    return { enabled: false, words: [...DEFAULT_BAD_WORDS] };
+}
+
+async function setAntibadwordSettings(chatId, enabled, words) {
+    const data = await loadDatabase();
+    data[chatId] = {
+        enabled: Boolean(enabled),
+        words: words || [...DEFAULT_BAD_WORDS],
+        updatedAt: new Date().toISOString()
+    };
+    await saveDatabase(data);
+    return data[chatId];
+}
+
+async function removeAntibadwordSettings(chatId) {
+    const data = await loadDatabase();
+    delete data[chatId];
+    await saveDatabase(data);
+}
+
+// ============================================================
+// CHECK BADWORD HANDLER
 // ============================================================
 
 export async function checkAntiBadword(sock, message, context) {
@@ -168,7 +165,7 @@ export async function checkAntiBadword(sock, message, context) {
         
         // Get settings
         const settings = await getAntibadwordSettings(chatId);
-        if (!settings.enabled || !settings.words || settings.words.length === 0) return false;
+        if (!settings.enabled) return false;
         
         // Get message text
         const messageText = (message.message?.conversation ||
@@ -197,7 +194,7 @@ export async function checkAntiBadword(sock, message, context) {
             } catch {}
             
             // Send warning
-            const warningMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
+            const warnMsg = `╭──❍「 *🚫 ANTI-BADWORD SYSTEM* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🚫 *Word* : "${foundWord}"
 ├ 🗑️ *Action* : Message deleted
@@ -208,13 +205,13 @@ export async function checkAntiBadword(sock, message, context) {
 _📌 Please avoid using inappropriate language in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             
-            await sendStyledMessage(sock, chatId, warningMsg, [senderId], message);
+            await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
             return true;
         }
         
         return false;
     } catch (error) {
-        console.error('Error in antibadword check:', error);
+        console.error('Error in checkAntiBadword:', error);
         return false;
     }
 }
@@ -223,7 +220,7 @@ _📌 Please avoid using inappropriate language in this group_
 // COMMAND HANDLER
 // ============================================================
 
-async function handleAntiBadwordCommand(sock, chatId, message, args, isBotAdmin) {
+export async function handleAntiBadwordCommand(sock, chatId, message, args, currentPrefix, isBotAdmin) {
     const action = args[0]?.toLowerCase();
     const settings = await getAntibadwordSettings(chatId);
     const randomQuote = getRandomQuote();
@@ -235,20 +232,21 @@ async function handleAntiBadwordCommand(sock, chatId, message, args, isBotAdmin)
     // ========== SHOW STATUS (default) ==========
     if (!action || action === 'status') {
         const statusIcon = settings.enabled ? '✅' : '❌';
+        const statusText = settings.enabled ? 'ENABLED' : 'DISABLED';
         const wordCount = settings.words?.length || 0;
         
         const statusMsg = `╭──❍「 *🚫 ANTI-BADWORD FILTER* 」❍
-├ 📝 *Status* : ${statusIcon} ${settings.enabled ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Status* : ${statusIcon} ${statusText}
 ├ 🔢 *Blocked Words* : ${wordCount}
 ├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${args[2] || '.'}antibadword on - Enable filter
-│ 🔧 ${args[2] || '.'}antibadword off - Disable filter
-│ 🔧 ${args[2] || '.'}antibadword add <word> - Add word
-│ 🔧 ${args[2] || '.'}antibadword remove <word> - Remove word
-│ 🔧 ${args[2] || '.'}antibadword list - Show blocked words
-│ 🔧 ${args[2] || '.'}antibadword reset - Reset to default words
+│ 🔧 ${currentPrefix}antibadword on - Enable filter
+│ 🔧 ${currentPrefix}antibadword off - Disable filter
+│ 🔧 ${currentPrefix}antibadword add <word> - Add word
+│ 🔧 ${currentPrefix}antibadword remove <word> - Remove word
+│ 🔧 ${currentPrefix}antibadword list - Show blocked words
+│ 🔧 ${currentPrefix}antibadword reset - Reset to default
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 *Date* : ${date}
@@ -278,8 +276,7 @@ _📌 Admins and Owner are EXEMPT from antibadword filter_
             return;
         }
         
-        settings.enabled = true;
-        await saveAntibadwordSettings(chatId, settings);
+        await setAntibadwordSettings(chatId, true, settings.words);
         
         const enableMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ✅ *Status* : ENABLED
@@ -297,12 +294,11 @@ _📌 Messages with bad words will be automatically deleted_
     
     // ========== DISABLE ==========
     if (action === 'off') {
-        settings.enabled = false;
-        await saveAntibadwordSettings(chatId, settings);
+        await setAntibadwordSettings(chatId, false, settings.words);
         
         const disableMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ❌ *Status* : DISABLED
-├ 📝 *Note* : Badword filter is now inactive
+├ 📝 *Note* : Badword filter is inactive
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -315,8 +311,8 @@ _📌 Messages with bad words will be automatically deleted_
         const word = args.slice(1).join(' ').toLowerCase().trim();
         if (!word) {
             const usageMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
-├ ❌ *Usage* : .antibadword add <word>
-├ 📝 *Example* : .antibadword add badword
+├ ❌ *Usage* : ${currentPrefix}antibadword add <word>
+├ 📝 *Example* : ${currentPrefix}antibadword add badword
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -324,7 +320,6 @@ _📌 Messages with bad words will be automatically deleted_
             return;
         }
         
-        if (!settings.words) settings.words = [...DEFAULT_BAD_WORDS];
         if (settings.words.includes(word)) {
             const existsMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ❌ *Word* : "${word}"
@@ -336,12 +331,12 @@ _📌 Messages with bad words will be automatically deleted_
             return;
         }
         
-        settings.words.push(word);
-        await saveAntibadwordSettings(chatId, settings);
+        const newWords = [...settings.words, word];
+        await setAntibadwordSettings(chatId, settings.enabled, newWords);
         
         const addMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ✅ *Word Added* : "${word}"
-├ 📊 *Total Words* : ${settings.words.length}
+├ 📊 *Total Words* : ${newWords.length}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -354,8 +349,8 @@ _📌 Messages with bad words will be automatically deleted_
         const word = args.slice(1).join(' ').toLowerCase().trim();
         if (!word) {
             const usageMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
-├ ❌ *Usage* : .antibadword remove <word>
-├ 📝 *Example* : .antibadword remove badword
+├ ❌ *Usage* : ${currentPrefix}antibadword remove <word>
+├ 📝 *Example* : ${currentPrefix}antibadword remove badword
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -363,7 +358,7 @@ _📌 Messages with bad words will be automatically deleted_
             return;
         }
         
-        if (!settings.words || !settings.words.includes(word)) {
+        if (!settings.words.includes(word)) {
             const notFoundMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ❌ *Word* : "${word}"
 ├ 📝 *Status* : Not found in blocked list
@@ -374,12 +369,12 @@ _📌 Messages with bad words will be automatically deleted_
             return;
         }
         
-        settings.words = settings.words.filter((w) => w !== word);
-        await saveAntibadwordSettings(chatId, settings);
+        const newWords = settings.words.filter((w) => w !== word);
+        await setAntibadwordSettings(chatId, settings.enabled, newWords);
         
         const removeMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ✅ *Word Removed* : "${word}"
-├ 📊 *Remaining Words* : ${settings.words.length}
+├ 📊 *Remaining Words* : ${newWords.length}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -396,7 +391,7 @@ _📌 Messages with bad words will be automatically deleted_
 ├ 📝 *Status* : No words blocked
 ╰──────❍
 
-_📌 Use .antibadword add <word> to add words_
+_📌 Use ${currentPrefix}antibadword add <word> to add words_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, emptyMsg, [], message);
             return;
@@ -428,12 +423,11 @@ ${wordList}╰─┬────❍
     
     // ========== RESET TO DEFAULT ==========
     if (action === 'reset') {
-        settings.words = [...DEFAULT_BAD_WORDS];
-        await saveAntibadwordSettings(chatId, settings);
+        await setAntibadwordSettings(chatId, settings.enabled, [...DEFAULT_BAD_WORDS]);
         
         const resetMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ 🔄 *Reset* : To default bad words
-├ 📊 *Total Words* : ${settings.words.length}
+├ 📊 *Total Words* : ${DEFAULT_BAD_WORDS.length}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -444,7 +438,7 @@ ${wordList}╰─┬────❍
     // ========== INVALID COMMAND ==========
     const invalidMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
 ├ ❌ *Invalid command* : ${action}
-├ 📝 *Use* : .antibadword for help
+├ 📝 *Use* : ${currentPrefix}antibadword for help
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -452,62 +446,12 @@ ${wordList}╰─┬────❍
 }
 
 // ============================================================
-// MAIN COMMAND
+// SINGLE EXPORT - NO DUPLICATES
 // ============================================================
 
-export default {
-    name: 'antibadword',
-    description: 'Configure anti-badword filter for groups',
-    icon: '🚫',
-    alias: ['abw', 'badword', 'antibad', 'filter'],
-    category: 'group',
-    groupOnly: true,
-    
-    async execute(sock, msg, args, currentPrefix, { isOwner, jidManager }) {
-        
-        const chatId = msg.key.remoteJid;
-        const senderId = msg.key.participant || chatId;
-        
-        // Check if it's a group
-        const groupCheck = isGroup(chatId);
-        if (!groupCheck.isGroup) {
-            const notGroupMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
-├ ❌ *Error* : This command only works in groups!
-╰──────❍
-
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, notGroupMsg, [], msg);
-            return;
-        }
-        
-        // Check if sender is owner or admin
-        const ownerCheck = await isOwner(senderId, jidManager);
-        const adminCheck = await isAdmin(sock, chatId, senderId);
-        const isAuthorized = ownerCheck.isOwner || adminCheck.isSenderAdmin;
-        
-        if (!isAuthorized) {
-            const notAuthMsg = `╭──❍「 *🚫 ANTI-BADWORD* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Only admins can use this command!
-╰──────❍
-
-_📌 Contact group admin for assistance_
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, notAuthMsg, [senderId], msg);
-            return;
-        }
-        
-        // Check if bot is admin (needed for deletion)
-        const botAdminCheck = await isAdmin(sock, chatId, sock.user.id);
-        const isBotAdmin = botAdminCheck.isBotAdmin;
-        
-        // Pass prefix as args[2] for help display
-        const newArgs = [...args];
-        newArgs[2] = currentPrefix;
-        
-        await handleAntiBadwordCommand(sock, chatId, msg, newArgs, isBotAdmin);
-    }
+export { 
+    getAntibadwordSettings, 
+    setAntibadwordSettings, 
+    removeAntibadwordSettings,
+    DEFAULT_BAD_WORDS
 };
-
-// Export for use in index.js
-export { handleAntiBadwordCommand, checkAntiBadword, getAntibadwordSettings, saveAntibadwordSettings };
