@@ -1,10 +1,6 @@
-/*****************************************************************************
- *                     Developed By STANY TZ                                 *
- *****************************************************************************/
-
 import { config } from '../config.js';
 
-function isChatAllowed(chatId, senderId, isOwner) {
+export function isChatAllowed(chatId, senderId, isOwner) {
     if (isOwner) return true;
     
     const isGroup = chatId?.endsWith('@g.us');
@@ -17,5 +13,3 @@ function isChatAllowed(chatId, senderId, isOwner) {
         default: return true;
     }
 }
-
-export { isChatAllowed };
