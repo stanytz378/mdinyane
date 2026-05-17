@@ -14,6 +14,10 @@
 //  MDINYANE — WhatsApp Bot Framework
 // ============================================================
 
+// ============================================================
+// CONSOLE LOGGER SETUP
+// ============================================================
+
 const originalConsoleMethods = {
     log: console.log, info: console.info, warn: console.warn,
     error: console.error, debug: console.debug, trace: console.trace,
@@ -76,6 +80,10 @@ process.env.BAILEYS_DISABLE_LOG = 'true';
 process.env.DISABLE_BAILEYS_LOG = 'true';
 process.env.PINO_DISABLE = 'true';
 
+// ============================================================
+// IMPORTS
+// ============================================================
+
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -85,22 +93,45 @@ import chalk from 'chalk';
 import readline from 'readline';
 import moment from 'moment-timezone';
 
-// ============================================================
-// STANYCORE IMPORTS
-// ============================================================
+// STANY CORE
 import { processMessage, afterCommand, initializeCore, config, updateConfig } from './stanycore/index.js';
 
-// ============================================================
-// ORIGINAL IMPORTS (from stany folder)
-// ============================================================
+// STANY AUTOMATION
 import { handleAutoReact } from './stany/automation/autoreactstatus.js';
 import { handleAutoView } from './stany/automation/autoviewstatus.js';
+import { handleStatusUpdate } from './stany/automation/autostatus.js';
+
+// STANY GROUP
 import { initializeAutoJoin } from './stany/group/add.js';
 import antidemote from './stany/group/antidemote.js';
 import banCommand from './stany/group/ban.js';
+import { handleLinkDetection } from './stany/group/antilink.js';
+import { checkAntiBadword } from './stany/group/antibadword.js';
+import { handleTagDetection } from './stany/group/antitag.js';
+import { handleAntiSpam, invalidateGroupCache } from './stany/group/antispam.js';
+import { handleStatusMention } from './stany/group/antistatusmention.js';
+import { handleMutedMessages, isUserMuted, removeMutedUser } from './stany/group/mute.js';
+import { getWelcomeSettings, setWelcomeSettings } from './stany/group/welcome.js';
+import { getGoodbyeSettings, setGoodbyeSettings } from './stany/group/goodbye.js';
 
-// Session downloader
+// STANY MEDIA (Handlers)
+import { handleAntiMedia } from './stanymedia/antimedia.js';
+import { handleAntiEmail } from './stanymedia/antiemail.js';
+import { handleAntiReaction } from './stanymedia/antireaction.js';
+
+// STANY OWNER
+import { handleCall } from './stany/owner/anticall.js';
+import { storeMessage, handleMessageRevocation } from './stany/owner/antidelete.js';
+
+// SESSION
 import SaveCreds from './mdinyane/session.js';
+
+// UTILITIES
+import { channelInfo, botImagePath } from './stanytz/messageConfig.js';
+import isAdmin from './stanymain/isAdmin.js';
+import isOwner from './stanymain/isOwner.js';
+import isGroup from './stanymain/isGroup.js';
+import { isSudoUser } from './stany/owner/sudo.js';
 
 dotenv.config({ path: './.env' });
 
@@ -109,9 +140,13 @@ let messageLogCounter = 0;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// ============================================================
+// CONFIGURATION CONSTANTS
+// ============================================================
+
 const SESSION_DIR = './session';
 const BOT_NAME = process.env.BOT_NAME || 'MDINYANE';
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const DEFAULT_PREFIX = process.env.PREFIX || '.';
 const OWNER_FILE = './owner.json';
 const PREFIX_CONFIG_FILE = './prefix_config.json';
@@ -134,12 +169,20 @@ const GROUP_NAME = 'STANYTZ TEAM';
 const AUTO_JOIN_LOG_FILE = './auto_join_log.json';
 const BOT_IMAGE_PATH = './stanytz/B803A026-2887-4715-8FE6-05E82D801427.png';
 
+// ============================================================
+// SILENCE BAILEYS & PROCESS FILTERS
+// ============================================================
+
 function silenceBaileysCompletely() {
     try { const pino = require('pino'); pino({ level: 'silent', enabled: false }); } catch {}
 }
 silenceBaileysCompletely();
 console.clear();
 setupProcessFilter();
+
+// ============================================================
+// LOGGER CLASS
+// ============================================================
 
 class UltraCleanLogger {
     static log(...args) {
@@ -187,6 +230,10 @@ const ultraSilentLogger = {
     success: () => {}, warning: () => {}, event: () => {}, command: () => {}
 };
 
+// ============================================================
+// RATE LIMITER
+// ============================================================
+
 class RateLimitProtection {
     constructor() {
         this.commandTimestamps = new Map();
@@ -232,6 +279,10 @@ class RateLimitProtection {
 }
 
 const rateLimiter = new RateLimitProtection();
+
+// ============================================================
+// PREFIX MANAGEMENT
+// ============================================================
 
 let prefixCache = DEFAULT_PREFIX;
 let prefixHistory = [];
@@ -317,6 +368,10 @@ function detectPlatform() {
     if (process.env.VERCEL) return 'Vercel';
     return 'Local/VPS';
 }
+
+// ============================================================
+// JID MANAGER & OWNER
+// ============================================================
 
 let OWNER_NUMBER = null, OWNER_JID = null, OWNER_CLEAN_JID = null, OWNER_CLEAN_NUMBER = null, OWNER_LID = null;
 let SOCKET_INSTANCE = null, isConnected = false, store = null;
@@ -552,8 +607,7 @@ class AutoGroupJoinSystem {
 const autoGroupJoinSystem = new AutoGroupJoinSystem();
 
 // ============================================================
-// ULTIMATE FIX SYSTEM & AUTO CONNECT
-// ============================================================
+// ULTIMATE FIX SYSTEM & AUTO CONNECT// ============================================================
 
 class UltimateFixSystem {
     constructor() { this.fixedJids = new Set(); this.fixApplied = false; this.restartFixAttempted = false; }
@@ -611,6 +665,10 @@ class AutoConnectOnStart {
 }
 
 const autoConnectOnStart = new AutoConnectOnStart();
+
+// ============================================================
+// AUTO LINK SYSTEM
+// ============================================================
 
 class AutoLinkSystem {
     constructor() { this.linkAttempts = new Map(); this.MAX_ATTEMPTS = 3; this.autoConnectEnabled = AUTO_CONNECT_ON_LINK; }
@@ -695,6 +753,10 @@ async function handleConnectCommand(sock, msg, args, cleaned) {
         return true;
     } catch { return false; }
 }
+
+// ============================================================
+// STATUS DETECTOR
+// ============================================================
 
 class StatusDetector {
     constructor() {
@@ -797,6 +859,10 @@ class MessageStore {
     getMessage(jid, messageId) { try { return this.messages.get(`${jid}|${messageId}`) || null; } catch { return null; } }
 }
 
+// ============================================================
+// COMMANDS LOADER
+// ============================================================
+
 const commands = new Map();
 const commandCategories = new Map();
 
@@ -829,6 +895,10 @@ async function loadCommandsFromFolder(folderPath, category = 'general') {
         if (categoryCount > 0) UltraCleanLogger.info(`${categoryCount} commands loaded from ${category}`);
     } catch {}
 }
+
+// ============================================================
+// SESSION & AUTHENTICATION
+// ============================================================
 
 function parseMDINYANESession(sessionString) {
     try {
@@ -905,11 +975,14 @@ class LoginManager {
 }
 
 // ============================================================
-// WELCOME MESSAGE FUNCTION
+// WELCOME & GOODBYE MESSAGES
 // ============================================================
 
 async function sendWelcomeMessage(sock, groupId, participants) {
     try {
+        const settings = await getWelcomeSettings(groupId);
+        if (!settings.enabled) return;
+        
         const now = moment().tz('Africa/Dar_es_Salaam');
         const time = now.format('HH:mm:ss');
         const date = now.format('DD/MM/YYYY');
@@ -918,20 +991,25 @@ async function sendWelcomeMessage(sock, groupId, participants) {
             const participantId = typeof participant === 'string' ? participant : participant.id;
             const participantName = participantId.split('@')[0];
             
-            const welcomeMsg = `╭──❍「 *👋 WELCOME NEW MEMBER* 」❍
-├ 👤 *Name* : @${participantName}
+            let message = settings.message || '🎉 Welcome {name} to the group!';
+            message = message.replace(/{name}/g, participantName);
+            message = message.replace(/{time}/g, time);
+            message = message.replace(/{date}/g, date);
+            
+            const welcomeMsg = `╭──❍「 *👋 WELCOME* 」❍
+├ 👤 *${message}*
 ├ 📅 *Date* : ${date}
 ├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 
-✨ *"Welcome to our community! 🎉"* ✨
+✨ *"Enjoy your stay!"* ✨
 
-_📌 Please read group rules and enjoy your stay_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             
             await sock.sendMessage(groupId, {
                 text: welcomeMsg,
-                mentions: [participantId]
+                mentions: [participantId],
+                contextInfo: channelInfo.contextInfo
             });
         }
     } catch (error) {
@@ -941,22 +1019,36 @@ _📌 Please read group rules and enjoy your stay_
 
 async function sendGoodbyeMessage(sock, groupId, participants) {
     try {
+        const settings = await getGoodbyeSettings(groupId);
+        if (!settings.enabled) return;
+        
+        const now = moment().tz('Africa/Dar_es_Salaam');
+        const time = now.format('HH:mm:ss');
+        const date = now.format('DD/MM/YYYY');
+        
         for (const participant of participants) {
             const participantId = typeof participant === 'string' ? participant : participant.id;
             const participantName = participantId.split('@')[0];
             
+            let message = settings.message || '👋 Goodbye {name}! We\'ll miss you!';
+            message = message.replace(/{name}/g, participantName);
+            message = message.replace(/{time}/g, time);
+            message = message.replace(/{date}/g, date);
+            
             const goodbyeMsg = `╭──❍「 *👋 GOODBYE* 」❍
-├ 👤 *User* : @${participantName}
-├ 📝 *Status* : Has left the group
+├ 👤 *${message}*
+├ 📅 *Date* : ${date}
+├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 
-✨ *"We'll miss you! Take care! 👋"* ✨
+✨ *"Take care!"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             
             await sock.sendMessage(groupId, {
                 text: goodbyeMsg,
-                mentions: [participantId]
+                mentions: [participantId],
+                contextInfo: channelInfo.contextInfo
             });
         }
     } catch (error) {
@@ -1067,6 +1159,8 @@ async function startBot(loginMode = 'pair', loginData = null) {
                 } else if (action === 'remove') {
                     await sendGoodbyeMessage(sock, id, participants);
                 }
+                
+                invalidateGroupCache(id);
             } catch (error) { UltraCleanLogger.warning(`Group update error: ${error.message}`); }
         });
         
@@ -1082,6 +1176,7 @@ async function startBot(loginMode = 'pair', loginData = null) {
                         await statusDetector.detectStatusUpdate(msg);
                         await handleAutoView(sock, msg.key);
                         await handleAutoReact(sock, msg.key);
+                        await handleStatusUpdate(sock, msg);
                     }, 800);
                 }
                 return;
@@ -1089,11 +1184,67 @@ async function startBot(loginMode = 'pair', loginData = null) {
             
             if (store) store.addMessage(msg.key.remoteJid, msg.key.id, msg);
             
-            // Process STANY CORE (auto typing, recording, reading)
+            // Store for antidelete
+            await storeMessage(sock, msg);
+            
+            const chatId = msg.key.remoteJid;
+            const senderJid = msg.key.participant || chatId;
+            const textMsg = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+            
+            // Check if user is banned
+            const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8')).catch(() => ({ users: [] }));
+            if (bannedData.users?.some(u => u.id === senderJid.split('@')[0])) return;
+            
+            // Check if user is muted
+            const isMuted = await handleMutedMessages(sock, chatId, senderJid, msg);
+            if (isMuted) return;
+            
+            // Process STANY CORE
             await processMessage(sock, msg);
+            
+            // Anti-Link detection
+            await handleLinkDetection(sock, chatId, msg, textMsg, senderJid);
+            
+            // Anti-Badword detection
+            await checkAntiBadword(sock, msg, { chatId, senderId: senderJid });
+            
+            // Anti-Tag detection
+            await handleTagDetection(sock, chatId, msg, senderJid);
+            
+            // Anti-Media detection
+            await handleAntiMedia(sock, chatId, msg, senderJid);
+            
+            // Anti-Email detection
+            await handleAntiEmail(sock, chatId, msg, textMsg, senderJid);
+            
+            // Anti-Spam detection
+            const ownerCheck = await isOwner(senderJid);
+            await handleAntiSpam(sock, chatId, msg, senderJid, ownerCheck.isOwner);
+            
+            // Anti-Status Mention
+            if (chatId.endsWith('@g.us')) {
+                await handleStatusMention(sock, msg, chatId, true, senderJid);
+            }
             
             // Process regular commands
             await handleIncomingMessage(sock, msg);
+        });
+        
+        // Reactions handler
+        sock.ev.on('reactions.update', async (reactions) => {
+            for (const reaction of reactions) {
+                await handleAntiReaction(sock, reaction);
+            }
+        });
+        
+        // Calls handler
+        sock.ev.on('call', async (calls) => {
+            await handleCall(sock, calls);
+        });
+        
+        // Message revocation (antidelete)
+        sock.ev.on('message-revoke.evict', async (revocationMessage) => {
+            await handleMessageRevocation(sock, revocationMessage);
         });
         
         await commandLoadPromise;
@@ -1141,9 +1292,9 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
             const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
             const successMessage = `
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃      🌟 WELCOME TO MDINYANE 🌟      ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━┓
+┃🌟 WELCOME TO MDINYANE 🌟     
+┗━━━━━━━━━━━━━━━━━━━━┛
 
 ╭━━❲ 🔐 DEVICE STATUS ❳━━⬣
 ┃
@@ -1152,7 +1303,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  📱 *Your Number:* +${ownerInfo.ownerNumber}
 ┃  ⏰ *Time:* ${time} | 📅 ${date}
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 📋 BOT INFO ❳━━⬣
 ┃
@@ -1161,7 +1312,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  👑 *Owner:* STANY TZ
 ┃  🚀 *Status:* ONLINE 24/7
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 🎯 QUICK START ❳━━⬣
 ┃
@@ -1169,7 +1320,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  📢 \`${prefixDisplay}owner\` - Contact owner
 ┃  📸 \`${prefixDisplay}sticker\` - Convert to sticker
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 🔔 IMPORTANT ❳━━⬣
 ┃
@@ -1178,11 +1329,11 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  ⚠️ *Note:* Bot may take few seconds to respond
 ┃  💡 Type \`${prefixDisplay}help\` for detailed guide
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━⬣
 
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃   🎉 THANK YOU FOR CHOOSING US 🎉   ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━━┓
+┃🎉 THANK YOU FOR CHOOSING US 🎉   
+┗━━━━━━━━━━━━━━━━━━━━━━┛
 
 > *MDINYANE - WhatsApp Bot | ᴾᵒʷᵉʳᵉᵈ ᵇʸ ˢᵀᴬᴺʸ ᵀᶻ*
             `.trim();
@@ -1380,7 +1531,10 @@ async function handleIncomingMessage(sock, msg) {
         const command = commands.get(commandName);
         if (command) {
             try {
-                if (command.ownerOnly && !jidManager.isOwner(msg)) { try { await sock.sendMessage(chatId, { text: '❌ *Owner Only Command*' }); } catch {} return; }
+                if (command.ownerOnly && !jidManager.isOwner(msg) && !isSudoUser(senderJid)) { 
+                    try { await sock.sendMessage(chatId, { text: '❌ *Owner Only Command*' }); } catch {} 
+                    return; 
+                }
                 if (commandName.includes('sticker')) await delay(1000);
                 await command.execute(sock, msg, args, usedPrefix || prefixes[0], { 
                     OWNER_NUMBER: OWNER_CLEAN_NUMBER, 
@@ -1399,7 +1553,6 @@ async function handleIncomingMessage(sock, msg) {
                     isPrefixless: isPrefixlessMode 
                 });
                 
-                // After command - show typing/recording
                 const isOwnerUser = jidManager.isOwner(msg);
                 await afterCommand(sock, chatId, senderJid, isOwnerUser);
                 
@@ -1438,6 +1591,10 @@ async function main() {
         await startBot(loginInfo.mode, loginData);
     } catch (error) { UltraCleanLogger.error(`Main error: ${error.message}`); setTimeout(async () => { await main(); }, 8000); }
 }
+
+// ============================================================
+// PROCESS HANDLERS
+// ============================================================
 
 process.on('SIGINT', () => {
     console.log(chalk.yellow('\n👋 Shutting down gracefully...'));
