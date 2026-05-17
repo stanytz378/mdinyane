@@ -31,6 +31,13 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 // ============================================================
+// SPAM TRACKERS
+// ============================================================
+const spamTracker = new Map();
+const groupMetadataCache = new Map();
+const META_TTL_MS = 5 * 60 * 1000;
+
+// ============================================================
 // QUOTES
 // ============================================================
 const QUOTES = [
@@ -47,11 +54,15 @@ const QUOTES = [
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
 // ============================================================
-// SPAM TRACKER
+// DEFAULT CONFIG
 // ============================================================
-const spamTracker = new Map();
-const metaCache = new Map();
-const META_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_CONFIG = {
+    enabled: false,
+    maxMessages: 5,
+    windowSeconds: 5,
+    action: 'warn',
+    warnCount: 3
+};
 
 // ============================================================
 // SEND WITH IMAGE AND FORWARDED MARK
@@ -85,18 +96,10 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
 }
 
 // ============================================================
-// CONFIG FUNCTIONS
+// DATABASE FUNCTIONS
 // ============================================================
 
-const DEFAULT_CONFIG = {
-    enabled: false,
-    maxMessages: 5,
-    windowSeconds: 5,
-    action: 'warn',
-    warnCount: 3
-};
-
-async function loadConfig() {
+async function loadDatabase() {
     try {
         if (fs.existsSync(ANTISPAM_FILE)) {
             return JSON.parse(fs.readFileSync(ANTISPAM_FILE, 'utf8'));
@@ -107,9 +110,9 @@ async function loadConfig() {
     }
 }
 
-async function saveConfig(config) {
+async function saveDatabase(data) {
     try {
-        fs.writeFileSync(ANTISPAM_FILE, JSON.stringify(config, null, 2));
+        fs.writeFileSync(ANTISPAM_FILE, JSON.stringify(data, null, 2));
         return true;
     } catch (error) {
         console.error('Error saving antispam config:', error);
@@ -118,15 +121,21 @@ async function saveConfig(config) {
 }
 
 async function getGroupConfig(chatId) {
-    const config = await loadConfig();
-    return config[chatId] || { ...DEFAULT_CONFIG };
+    const data = await loadDatabase();
+    return data[chatId] || { ...DEFAULT_CONFIG };
 }
 
 async function setGroupConfig(chatId, updates) {
-    const config = await loadConfig();
-    config[chatId] = { ...(config[chatId] || DEFAULT_CONFIG), ...updates };
-    await saveConfig(config);
-    return config[chatId];
+    const data = await loadDatabase();
+    data[chatId] = { ...(data[chatId] || DEFAULT_CONFIG), ...updates, updatedAt: new Date().toISOString() };
+    await saveDatabase(data);
+    return data[chatId];
+}
+
+async function removeGroupConfig(chatId) {
+    const data = await loadDatabase();
+    delete data[chatId];
+    await saveDatabase(data);
 }
 
 // ============================================================
@@ -134,14 +143,14 @@ async function setGroupConfig(chatId, updates) {
 // ============================================================
 
 async function getCachedParticipants(sock, chatId) {
-    const cached = metaCache.get(chatId);
+    const cached = groupMetadataCache.get(chatId);
     if (cached && (Date.now() - cached.fetchedAt) < META_TTL_MS) {
         return cached.participants;
     }
     try {
         const metadata = await sock.groupMetadata(chatId);
         const participants = metadata?.participants || [];
-        metaCache.set(chatId, { participants, fetchedAt: Date.now() });
+        groupMetadataCache.set(chatId, { participants, fetchedAt: Date.now() });
         return participants;
     } catch {
         return cached?.participants || [];
@@ -158,6 +167,15 @@ function isParticipantAdmin(participants, jid) {
         const pPhone = p.phoneNumber ? p.phoneNumber.split('@')[0] : '';
         return (pId === jid || pNum === num || pPhone === num);
     });
+}
+
+// ============================================================
+// INVALIDATE CACHE
+// ============================================================
+
+export function invalidateGroupCache(chatId) {
+    groupMetadataCache.delete(chatId);
+    spamTracker.delete(chatId);
 }
 
 // ============================================================
@@ -178,7 +196,7 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
         // Get cached participants
         const participants = await getCachedParticipants(sock, chatId);
         
-        // Check if bot is admin (needed for kick/mute)
+        // Check if bot is admin (needed for kick)
         const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
         const isBotAdmin = isParticipantAdmin(participants, botId);
         
@@ -216,47 +234,45 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
         
         const randomQuote = getRandomQuote();
         
+        // ========== WARN ACTION ==========
         if (groupConfig.action === 'warn') {
             userData.warns++;
             const warnsLeft = groupConfig.warnCount - userData.warns;
             
             if (warnsLeft > 0) {
-                const warnMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ⚠️ *Warning* : ${userData.warns}/${groupConfig.warnCount}
-├ 📝 *Remaining* : ${warnsLeft} warning(s) left
+                const warnMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 👤 @${senderId.split('@')[0]}
+├ ⚠️ Warning ${userData.warns}/${groupConfig.warnCount}
+├ 📝 ${warnsLeft} more warning(s) left
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Please slow down! Sending too many messages too quickly_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                 await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
             } else {
                 userData.warns = 0;
                 if (!isBotAdmin) {
-                    const noAdminMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ⚠️ *Status* : Max warnings reached
-├ ❌ *Error* : Make me admin to kick!
+                    const noAdminMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 👤 @${senderId.split('@')[0]}
+├ ⚠️ Max warnings reached
+├ ❌ Make me admin to kick!
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 User has reached warning limit but bot is not admin_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                     await sendStyledMessage(sock, chatId, noAdminMsg, [senderId], message);
                 } else {
                     await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
-                    const kickedMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ 🚫 *Action* : KICKED
-├ 📝 *Reason* : Repeated spamming (${groupConfig.warnCount} warnings)
+                    const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 👤 @${senderId.split('@')[0]}
+├ 🚫 KICKED
+├ 📝 Repeated spamming
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 User has been removed for spamming_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                     await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
                 }
@@ -264,30 +280,29 @@ _📌 User has been removed for spamming_
             return true;
         }
         
+        // ========== KICK ACTION ==========
         if (groupConfig.action === 'kick') {
             if (!isBotAdmin) {
-                const noAdminKickMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ 🚫 *Action* : Spam detected
-├ ❌ *Error* : Make me admin to kick!
+                const noAdminKickMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 👤 @${senderId.split('@')[0]}
+├ 🚫 Spam detected
+├ ❌ Make me admin to kick!
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Please promote bot to admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                 await sendStyledMessage(sock, chatId, noAdminKickMsg, [senderId], message);
             } else {
                 await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
-                const kickedMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ 🚫 *Action* : KICKED
-├ 📝 *Reason* : Spamming (${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s)
+                const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 👤 @${senderId.split('@')[0]}
+├ 🚫 KICKED
+├ 📝 Spamming (${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s)
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 User has been removed for spamming_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                 await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
             }
@@ -296,22 +311,13 @@ _📌 User has been removed for spamming_
         
         return false;
     } catch (error) {
-        console.error('Error in antispam handler:', error);
+        console.error('AntiSpam handler error:', error);
         return false;
     }
 }
 
 // ============================================================
-// INVALIDATE CACHE
-// ============================================================
-
-export function invalidateGroupCache(chatId) {
-    metaCache.delete(chatId);
-    spamTracker.delete(chatId);
-}
-
-// ============================================================
-// MAIN COMMAND
+// COMMAND HANDLER
 // ============================================================
 
 export default {
@@ -331,7 +337,7 @@ export default {
         const groupCheck = isGroup(chatId);
         if (!groupCheck.isGroup) {
             const notGroupMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Error* : This command only works in groups!
+├ ❌ This command only works in groups!
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -346,8 +352,8 @@ export default {
         
         if (!isAuthorized) {
             const notAuthMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Only admins can use this command!
+├ 👤 @${senderId.split('@')[0]}
+├ ❌ Only admins can use this command!
 ╰──────❍
 
 _📌 Contact group admin for assistance_
@@ -379,30 +385,30 @@ _📌 Contact group admin for assistance_
             const statusText = groupConfig.enabled ? 'ENABLED' : 'DISABLED';
             const actionText = groupConfig.action.toUpperCase();
             
-            const statusMsg = `╭──❍「 *🛡️ ANTISPAM PROTECTION* 」❍
-├ 📵 *Status* : ${statusIcon} ${statusText}
-├ ⚡ *Limit* : ${groupConfig.maxMessages} messages in ${groupConfig.windowSeconds}s
-├ 🚫 *Action* : ${actionText}
-├ ⚠️ *Warn Limit* : ${groupConfig.warnCount} warns before kick
-├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
+            const statusMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 📵 Status : ${statusIcon} ${statusText}
+├ ⚡ Limit : ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
+├ 🚫 Action : ${actionText}
+├ ⚠️ Warn Limit : ${groupConfig.warnCount} warns
+├ 🤖 Bot Admin : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${currentPrefix}antispam on - Enable protection
-│ 🔧 ${currentPrefix}antispam off - Disable protection
+│ 🔧 ${currentPrefix}antispam on - Enable
+│ 🔧 ${currentPrefix}antispam off - Disable
 │ 🔧 ${currentPrefix}antispam set <msgs> <secs> - Set limit
 │ 🔧 ${currentPrefix}antispam action warn/kick - Set action
 │ 🔧 ${currentPrefix}antispam warns <num> - Set warn limit
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
-├ 📅 *Date* : ${date}
-├ 📆 *Day* : ${day}
-├ ⏰ *Time* : ${time} EAT
-├ 👑 *Exempt* : Admins & Owner
+├ 📅 ${date}
+├ 📆 ${day}
+├ ⏰ ${time} EAT
+├ 👑 Exempt : Admins & Owner
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Admins and Owner are EXEMPT from antispam_
+_📌 Admins and Owner are EXEMPT_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, statusMsg, [], msg);
             return;
@@ -412,8 +418,8 @@ _📌 Admins and Owner are EXEMPT from antispam_
         if (action === 'on' || action === 'enable') {
             if (groupConfig.enabled) {
                 const alreadyMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ⚠️ *Status* : Already ENABLED
-├ 📝 *Limit* : ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
+├ ⚠️ Already ENABLED
+├ 📝 ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -423,11 +429,11 @@ _📌 Admins and Owner are EXEMPT from antispam_
             
             if (groupConfig.action !== 'warn' && !isBotAdmin) {
                 const warnNoAdminMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ⚠️ *Warning* : Action is ${groupConfig.action.toUpperCase()}
-├ ❌ *Note* : Bot needs admin rights to execute this action
+├ ⚠️ Action: ${groupConfig.action.toUpperCase()}
+├ ❌ Bot needs admin rights
 ╰──────❍
 
-_📌 Please make bot admin for full protection_
+_📌 Make bot admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                 await sendStyledMessage(sock, chatId, warnNoAdminMsg, [], msg);
             }
@@ -435,9 +441,9 @@ _📌 Please make bot admin for full protection_
             await setGroupConfig(chatId, { enabled: true });
             
             const enableMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ✅ *Status* : ENABLED
-├ ⚡ *Limit* : ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
-├ 🚫 *Action* : ${groupConfig.action.toUpperCase()}
+├ ✅ ENABLED
+├ ⚡ ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
+├ 🚫 Action: ${groupConfig.action.toUpperCase()}
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
@@ -452,7 +458,7 @@ _📌 Spam protection is now active_
         if (action === 'off' || action === 'disable') {
             if (!groupConfig.enabled) {
                 const alreadyOffMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ⚠️ *Status* : Already DISABLED
+├ ⚠️ Already DISABLED
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -463,8 +469,8 @@ _📌 Spam protection is now active_
             await setGroupConfig(chatId, { enabled: false });
             
             const disableMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Status* : DISABLED
-├ 📝 *Note* : Spam protection is inactive
+├ ❌ DISABLED
+├ 📝 Spam protection inactive
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -479,8 +485,8 @@ _📌 Spam protection is now active_
             
             if (isNaN(maxMsgs) || isNaN(windowSec) || maxMsgs < 2 || windowSec < 1) {
                 const usageMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Usage* : ${currentPrefix}antispam set <msgs> <seconds>
-├ 📝 *Example* : ${currentPrefix}antispam set 5 10
+├ ❌ Usage: ${currentPrefix}antispam set <msgs> <secs>
+├ 📝 Example: ${currentPrefix}antispam set 5 10
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -491,9 +497,9 @@ _📌 Spam protection is now active_
             await setGroupConfig(chatId, { maxMessages: maxMsgs, windowSeconds: windowSec });
             
             const setMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ✅ *Limit Updated*
-├ ⚡ *Max Messages* : ${maxMsgs}
-├ ⏱️ *Time Window* : ${windowSec} seconds
+├ ✅ Limit Updated
+├ ⚡ Max: ${maxMsgs} msgs
+├ ⏱️ Window: ${windowSec} seconds
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -505,10 +511,10 @@ _📌 Spam protection is now active_
         if (action === 'action') {
             const newAction = args[1]?.toLowerCase();
             
-            if (!['warn', 'kick'].includes(newAction)) {
+            if (!newAction || !['warn', 'kick'].includes(newAction)) {
                 const invalidActionMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Invalid action* : ${newAction}
-├ 📝 *Available* : warn, kick
+├ ❌ Invalid: ${newAction}
+├ 📝 Available: warn, kick
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -516,13 +522,13 @@ _📌 Spam protection is now active_
                 return;
             }
             
-            if (newAction !== 'warn' && !isBotAdmin) {
+            if (newAction === 'kick' && !isBotAdmin) {
                 const noAdminActionMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ⚠️ *Warning* : Action set to ${newAction.toUpperCase()}
-├ ❌ *Note* : Bot needs admin rights to execute this action
+├ ⚠️ Action: ${newAction.toUpperCase()}
+├ ❌ Bot needs admin rights
 ╰──────❍
 
-_📌 Please make bot admin for full protection_
+_📌 Make bot admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
                 await sendStyledMessage(sock, chatId, noAdminActionMsg, [], msg);
             }
@@ -530,8 +536,8 @@ _📌 Please make bot admin for full protection_
             await setGroupConfig(chatId, { action: newAction });
             
             const actionMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ✅ *Action Updated*
-├ 🚫 *Action* : ${newAction.toUpperCase()}
+├ ✅ Action Updated
+├ 🚫 ${newAction.toUpperCase()}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -545,8 +551,8 @@ _📌 Please make bot admin for full protection_
             
             if (isNaN(count) || count < 1) {
                 const usageWarnMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Usage* : ${currentPrefix}antispam warns <number>
-├ 📝 *Example* : ${currentPrefix}antispam warns 3
+├ ❌ Usage: ${currentPrefix}antispam warns <num>
+├ 📝 Example: ${currentPrefix}antispam warns 3
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -557,8 +563,8 @@ _📌 Please make bot admin for full protection_
             await setGroupConfig(chatId, { warnCount: count });
             
             const warnLimitMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ✅ *Warn Limit Updated*
-├ ⚠️ *Warns before kick* : ${count}
+├ ✅ Warn Limit Updated
+├ ⚠️ ${count} warns before kick
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -568,8 +574,8 @@ _📌 Please make bot admin for full protection_
         
         // ========== INVALID COMMAND ==========
         const invalidMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ ❌ *Invalid command* : ${action}
-├ 📝 *Use* : ${currentPrefix}antispam for help
+├ ❌ Invalid: ${action}
+├ 📝 Use: ${currentPrefix}antispam for help
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -577,5 +583,7 @@ _📌 Please make bot admin for full protection_
     }
 };
 
-// Export for use in index.js
-export { loadConfig, saveConfig, DEFAULT_CONFIG, getGroupConfig, setGroupConfig, invalidateGroupCache };
+// ============================================================
+// SINGLE EXPORT - NO DUPLICATES
+// ============================================================
+export { getGroupConfig, setGroupConfig, removeGroupConfig };
