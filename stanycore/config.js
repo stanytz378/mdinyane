@@ -15,24 +15,20 @@ if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Default configuration
 const defaultConfig = {
     ownerNumber: '',
     ownerName: 'STANY TZ',
-    prefix: '.',
-    mode: 'public',  // public, private, groups, self
+    prefixes: ['.'],
+    prefixless: false,
+    mode: 'public',
     sessionId: '',
-    // Auto Typing settings
     autoTyping: false,
-    autoTypingLocation: 'both',  // both, private, groups
-    // Auto Recording settings
+    autoTypingLocation: 'both',
     autoRecording: false,
-    autoRecordingLocation: 'both',  // both, private, groups
-    // Auto Read settings
+    autoRecordingLocation: 'both',
     autoRead: false,
     autoReadGroups: true,
     autoReadPrivate: true,
-    // Always Online
     alwaysOnline: false,
     updatedAt: new Date().toISOString()
 };
