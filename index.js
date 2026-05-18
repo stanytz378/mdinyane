@@ -80,10 +80,6 @@ process.env.BAILEYS_DISABLE_LOG = 'true';
 process.env.DISABLE_BAILEYS_LOG = 'true';
 process.env.PINO_DISABLE = 'true';
 
-// ============================================================
-// IMPORTS
-// ============================================================
-
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -114,7 +110,7 @@ import { handleMutedMessages, isUserMuted, removeMutedUser } from './stany/group
 import { getWelcomeSettings, setWelcomeSettings } from './stany/group/welcome.js';
 import { getGoodbyeSettings, setGoodbyeSettings } from './stany/group/goodbye.js';
 
-// STANY MEDIA (Handlers)
+// STANY MEDIA
 import { handleAntiMedia } from './stanymedia/antimedia.js';
 import { handleAntiEmail } from './stanymedia/antiemail.js';
 import { handleAntiReaction } from './stanymedia/antireaction.js';
@@ -170,7 +166,93 @@ const AUTO_JOIN_LOG_FILE = './auto_join_log.json';
 const BOT_IMAGE_PATH = './stanytz/B803A026-2887-4715-8FE6-05E82D801427.png';
 
 // ============================================================
-// SILENCE BAILEYS & PROCESS FILTERS
+// CACHE SYSTEMS
+// ============================================================
+
+const adminCache = new Map();
+const groupMetadataCache = new Map();
+const loadedCommandPaths = new Set();
+const loadedCommandNames = new Set();
+const CACHE_TTL = 60000; // 1 minute
+
+// Request queue for rate limiting
+const requestQueue = [];
+let isProcessingQueue = false;
+const REQUEST_DELAY = 2000;
+
+async function processRequestQueue() {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+    
+    while (requestQueue.length > 0) {
+        const { fn, resolve, reject } = requestQueue.shift();
+        try {
+            const result = await fn();
+            resolve(result);
+        } catch (error) {
+            reject(error);
+        }
+        await new Promise(r => setTimeout(r, REQUEST_DELAY));
+    }
+    
+    isProcessingQueue = false;
+}
+
+function queueRequest(fn) {
+    return new Promise((resolve, reject) => {
+        requestQueue.push({ fn, resolve, reject });
+        processRequestQueue();
+    });
+}
+
+// ============================================================
+// CACHED ISADMIN FUNCTION
+// ============================================================
+
+async function cachedIsAdmin(sock, chatId, senderId) {
+    try {
+        if (!chatId || !chatId.endsWith('@g.us')) {
+            return { isSenderAdmin: false, isBotAdmin: false, isGroup: false };
+        }
+        
+        const cacheKey = `${chatId}_${senderId}`;
+        if (adminCache.has(cacheKey)) {
+            const cached = adminCache.get(cacheKey);
+            if (Date.now() - cached.timestamp < CACHE_TTL) {
+                return cached.data;
+            }
+        }
+        
+        const metadata = await queueRequest(() => sock.groupMetadata(chatId));
+        const participants = metadata.participants || [];
+        
+        const botId = sock.user?.id || '';
+        const botNumber = botId.split('@')[0].split(':')[0];
+        const senderNumber = senderId.split('@')[0].split(':')[0];
+        
+        const isBotAdmin = participants.some(p => {
+            const pNumber = p.id.split('@')[0].split(':')[0];
+            return pNumber === botNumber && (p.admin === 'admin' || p.admin === 'superadmin');
+        });
+        
+        const isSenderAdmin = participants.some(p => {
+            const pNumber = p.id.split('@')[0].split(':')[0];
+            return pNumber === senderNumber && (p.admin === 'admin' || p.admin === 'superadmin');
+        });
+        
+        const result = { isSenderAdmin, isBotAdmin, isGroup: true };
+        
+        adminCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        
+        return result;
+    } catch (err) {
+        console.error('❌ Error in cachedIsAdmin:', err.message);
+        return { isSenderAdmin: false, isBotAdmin: false, isGroup: false };
+    }
+}
+
+// ============================================================
+// SILENCE BAILEYS
 // ============================================================
 
 function silenceBaileysCompletely() {
@@ -861,7 +943,7 @@ class MessageStore {
 }
 
 // ============================================================
-// COMMANDS LOADER
+// COMMANDS LOADER - FIXED (No duplicates)
 // ============================================================
 
 const commands = new Map();
@@ -870,31 +952,72 @@ const commandCategories = new Map();
 async function loadCommandsFromFolder(folderPath, category = 'general') {
     const absolutePath = path.resolve(folderPath);
     if (!fs.existsSync(absolutePath)) return;
+    
     try {
         const items = fs.readdirSync(absolutePath);
         let categoryCount = 0;
+        
         for (const item of items) {
             const fullPath = path.join(absolutePath, item);
             const stat = fs.statSync(fullPath);
-            if (stat.isDirectory()) { await loadCommandsFromFolder(fullPath, item); }
-            else if (item.endsWith('.js')) {
+            
+            if (stat.isDirectory()) {
+                await loadCommandsFromFolder(fullPath, item);
+            } else if (item.endsWith('.js')) {
+                // Skip if already loaded
+                if (loadedCommandPaths.has(fullPath)) continue;
+                
                 try {
                     if (item.includes('.test.') || item.includes('.disabled.')) continue;
+                    
                     const commandModule = await import(`file://${fullPath}`);
                     const command = commandModule.default || commandModule;
+                    
                     if (command && command.name) {
-                        command.category = category;
+                        // Skip duplicate command names
+                        if (loadedCommandNames.has(command.name.toLowerCase())) {
+                            UltraCleanLogger.warning(`⚠️ Skipping duplicate command: ${command.name}`);
+                            continue;
+                        }
+                        
+                        // Use command.category if exists, otherwise use folder name
+                        const cmdCategory = command.category || category;
+                        
+                        command.category = cmdCategory;
                         commands.set(command.name.toLowerCase(), command);
-                        if (!commandCategories.has(category)) commandCategories.set(category, []);
-                        commandCategories.get(category).push(command.name);
+                        loadedCommandPaths.add(fullPath);
+                        loadedCommandNames.add(command.name.toLowerCase());
+                        
+                        if (!commandCategories.has(cmdCategory)) {
+                            commandCategories.set(cmdCategory, []);
+                        }
+                        if (!commandCategories.get(cmdCategory).includes(command.name)) {
+                            commandCategories.get(cmdCategory).push(command.name);
+                        }
                         categoryCount++;
-                        if (Array.isArray(command.alias)) command.alias.forEach(alias => commands.set(alias.toLowerCase(), command));
+                        
+                        if (Array.isArray(command.alias)) {
+                            command.alias.forEach(alias => {
+                                if (!commands.has(alias.toLowerCase())) {
+                                    commands.set(alias.toLowerCase(), command);
+                                }
+                            });
+                        }
+                        
+                        UltraCleanLogger.info(`✅ Loaded: ${command.name} → ${cmdCategory}`);
                     }
-                } catch {}
+                } catch (error) {
+                    UltraCleanLogger.error(`Error loading ${item}: ${error.message}`);
+                }
             }
         }
-        if (categoryCount > 0) UltraCleanLogger.info(`${categoryCount} commands loaded from ${category}`);
-    } catch {}
+        
+        if (categoryCount > 0) {
+            UltraCleanLogger.info(`📁 ${categoryCount} commands loaded from ${category}`);
+        }
+    } catch (error) {
+        UltraCleanLogger.error(`Error scanning commands: ${error.message}`);
+    }
 }
 
 // ============================================================
@@ -1064,28 +1187,74 @@ async function sendGoodbyeMessage(sock, groupId, participants) {
 async function startBot(loginMode = 'pair', loginData = null) {
     try {
         UltraCleanLogger.info('🚀 Initializing WhatsApp connection...');
+        
+        // Check for session ID in env
         if (loginMode === 'session' && loginData) {
-            try { await authenticateWithSessionId(loginData); } catch { const lm = new LoginManager(); const nm = await lm.pairingCodeMode(); lm.close(); loginMode = nm.mode; loginData = nm.phone; }
+            try { await authenticateWithSessionId(loginData); } catch { 
+                const lm = new LoginManager(); 
+                const nm = await lm.pairingCodeMode(); 
+                lm.close(); 
+                loginMode = nm.mode; 
+                loginData = nm.phone; 
+            }
         }
-        commands.clear(); commandCategories.clear();
+        
+        commands.clear(); 
+        commandCategories.clear();
+        loadedCommandPaths.clear();
+        loadedCommandNames.clear();
+        
         const commandLoadPromise = loadCommandsFromFolder('./stany');
         store = new MessageStore();
         ensureSessionDir();
         statusDetector = new StatusDetector();
         autoConnectOnStart.reset();
+        
         const { default: makeWASocket } = await import('@whiskeysockets/baileys');
         const { useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, Browsers } = await import('@whiskeysockets/baileys');
+        
         let state, saveCreds;
-        try { const authState = await useMultiFileAuthState(SESSION_DIR); state = authState.state; saveCreds = authState.saveCreds; }
-        catch { cleanSession(); const freshAuth = await useMultiFileAuthState(SESSION_DIR); state = freshAuth.state; saveCreds = freshAuth.saveCreds; }
+        try { 
+            const authState = await useMultiFileAuthState(SESSION_DIR); 
+            state = authState.state; 
+            saveCreds = authState.saveCreds; 
+        } catch { 
+            cleanSession(); 
+            const freshAuth = await useMultiFileAuthState(SESSION_DIR); 
+            state = freshAuth.state; 
+            saveCreds = freshAuth.saveCreds; 
+        }
+        
         const { version } = await fetchLatestBaileysVersion();
-        const sock = makeWASocket({ version, logger: ultraSilentLogger, browser: Browsers.ubuntu('Chrome'), printQRInTerminal: false, auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, ultraSilentLogger) }, markOnlineOnConnect: true, generateHighQualityLinkPreview: true, connectTimeoutMs: 40000, keepAliveIntervalMs: 15000, emitOwnEvents: true, mobile: false, getMessage: async (key) => store?.getMessage(key.remoteJid, key.id) || null, defaultQueryTimeoutMs: 20000 });
-        SOCKET_INSTANCE = sock; connectionAttempts = 0; isWaitingForPairingCode = false;
+        
+        const sock = makeWASocket({ 
+            version, 
+            logger: ultraSilentLogger, 
+            browser: Browsers.ubuntu('Chrome'), 
+            printQRInTerminal: false, 
+            auth: { 
+                creds: state.creds, 
+                keys: makeCacheableSignalKeyStore(state.keys, ultraSilentLogger) 
+            }, 
+            markOnlineOnConnect: true, 
+            generateHighQualityLinkPreview: true, 
+            connectTimeoutMs: 40000, 
+            keepAliveIntervalMs: 15000, 
+            emitOwnEvents: true, 
+            mobile: false, 
+            getMessage: async (key) => store?.getMessage(key.remoteJid, key.id) || null, 
+            defaultQueryTimeoutMs: 20000 
+        });
+        
+        SOCKET_INSTANCE = sock; 
+        connectionAttempts = 0; 
+        isWaitingForPairingCode = false;
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             if (connection === 'open') {
-                isConnected = true; startHeartbeat(sock);
+                isConnected = true; 
+                startHeartbeat(sock);
                 await handleSuccessfulConnection(sock, loginMode, loginData);
                 isWaitingForPairingCode = false;
                 triggerRestartAutoFix(sock).catch(() => {});
@@ -1102,11 +1271,11 @@ async function startBot(loginMode = 'pair', loginData = null) {
                     }, 15000);
                 }
                 
-                // Initialize STANY CORE
                 await initializeCore(sock);
             }
             if (connection === 'close') {
-                isConnected = false; stopHeartbeat();
+                isConnected = false; 
+                stopHeartbeat();
                 if (statusDetector) statusDetector.saveStatusLogs();
                 if (memberDetector) memberDetector.saveDetectionData();
                 await handleConnectionCloseSilently(lastDisconnect, loginMode, loginData);
@@ -1201,58 +1370,46 @@ async function startBot(loginMode = 'pair', loginData = null) {
             const isMuted = await handleMutedMessages(sock, chatId, senderJid, msg);
             if (isMuted) return;
             
-            // Process STANY CORE
             await processMessage(sock, msg);
             
-            // Anti-Link detection
+            // Use cached isAdmin to avoid rate limit
             await handleLinkDetection(sock, chatId, msg, textMsg, senderJid);
-            
-            // Anti-Badword detection
             await checkAntiBadword(sock, msg, { chatId, senderId: senderJid });
-            
-            // Anti-Tag detection
             await handleTagDetection(sock, chatId, msg, senderJid);
-            
-            // Anti-Media detection
             await handleAntiMedia(sock, chatId, msg, senderJid);
-            
-            // Anti-Email detection
             await handleAntiEmail(sock, chatId, msg, textMsg, senderJid);
             
-            // Anti-Spam detection
             const ownerCheck = await isOwner(senderJid);
             await handleAntiSpam(sock, chatId, msg, senderJid, ownerCheck.isOwner);
             
-            // Anti-Status Mention
             if (chatId.endsWith('@g.us')) {
                 await handleStatusMention(sock, msg, chatId, true, senderJid);
             }
             
-            // Process regular commands
             await handleIncomingMessage(sock, msg);
         });
         
-        // Reactions handler
         sock.ev.on('reactions.update', async (reactions) => {
             for (const reaction of reactions) {
                 await handleAntiReaction(sock, reaction);
             }
         });
         
-        // Calls handler
         sock.ev.on('call', async (calls) => {
             await handleCall(sock, calls);
         });
         
-        // Message revocation (antidelete)
         sock.ev.on('message-revoke.evict', async (revocationMessage) => {
             await handleMessageRevocation(sock, revocationMessage);
         });
         
         await commandLoadPromise;
-        UltraCleanLogger.success(`✅ Loaded ${commands.size} commands`);
+        UltraCleanLogger.success(`✅ Loaded ${commands.size} commands from stany folder`);
         return sock;
-    } catch (error) { UltraCleanLogger.error('❌ Connection failed, retrying in 8 seconds...'); setTimeout(async () => { await startBot(loginMode, loginData); }, 8000); }
+    } catch (error) { 
+        UltraCleanLogger.error('❌ Connection failed, retrying in 8 seconds...'); 
+        setTimeout(async () => { await startBot(loginMode, loginData); }, 8000); 
+    }
 }
 
 async function triggerRestartAutoFix(sock) {
@@ -1270,7 +1427,8 @@ async function triggerRestartAutoFix(sock) {
 }
 
 async function handleSuccessfulConnection(sock, loginMode, loginData) {
-    OWNER_JID = sock.user.id; OWNER_NUMBER = OWNER_JID.split('@')[0];
+    OWNER_JID = sock.user.id; 
+    OWNER_NUMBER = OWNER_JID.split('@')[0];
     const isFirstConnection = !fs.existsSync(OWNER_FILE);
     if (isFirstConnection) jidManager.setNewOwner(OWNER_JID, false); else jidManager.loadOwnerData();
     const ownerInfo = jidManager.getOwnerInfo();
@@ -1574,7 +1732,9 @@ async function handleDefaultCommands(commandName, sock, msg, args, currentPrefix
             case 'uptime': { const uptime = process.uptime(); await sock.sendMessage(chatId, { text: `⏰ *Uptime:* ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s\n💾 *Memory:* ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB` }, { quoted: msg }); break; }
             case 'help': {
                 let helpText = `🀄️ *${BOT_NAME} v${VERSION} HELP*\n\n📋 *Prefix:* ${isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`}\n📊 *Total Commands:* ${commands.size}\n\n`;
-                for (const category of commandCategories.keys()) { const cmdList = commandCategories.get(category); helpText += `*${category.toUpperCase()}*\n${cmdList.map(c => `• ${currentPrefix}${c}`).join('\n')}\n\n`; }
+                for (const [category, cmdList] of commandCategories) { 
+                    helpText += `*${category.toUpperCase()}*\n${cmdList.map(c => `• ${currentPrefix}${c}`).join('\n')}\n\n`; 
+                }
                 await sock.sendMessage(chatId, { text: helpText }, { quoted: msg }); break;
             }
             case 'statusstats': { if (!statusDetector) { await sock.sendMessage(chatId, { text: '❌ Status Detector not initialized' }, { quoted: msg }); break; } const stats = statusDetector.getStats(); await sock.sendMessage(chatId, { text: `👁️ *STATUS DETECTOR STATS*\n\n📊 Total Detected: ${stats.totalDetected}\n🕒 Last Detection: ${stats.lastDetection}\n🔧 Detection Enabled: ${stats.detectionEnabled ? '✅' : '❌'}` }, { quoted: msg }); break; }
