@@ -1,108 +1,43 @@
 /*****************************************************************************
- *                                                                           *
  *                     Developed By STANY TZ                                 *
- *                                                                           *
- *  🌐  GitHub   : https://github.com/Stanytz378                             *
- *  ▶️  YouTube  : https://youtube.com/@STANYTZ                              *
- *  💬  WhatsApp : https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p     *
- *                                                                           *
- *    © 2026 STANY TZ. All rights reserved.                                 *
- *                                                                           *
  *****************************************************************************/
 
 import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
-import { fileURLToPath } from 'url';
-import { channelInfo, botImagePath } from '../../stanytz/messageConfig.js';
+import { channelInfo } from '../../stanytz/messageConfig.js';
 import isOwner from '../../stanymain/isOwner.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Data directory
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const AUTO_STATUS_FILE = path.join(DATA_DIR, 'autostatus.json');
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(AUTO_STATUS_FILE)) {
-    fs.writeFileSync(AUTO_STATUS_FILE, JSON.stringify({
-        enabled: false,
-        reactOn: false,
-        likeOn: true
-    }, null, 2));
+    fs.writeFileSync(AUTO_STATUS_FILE, JSON.stringify({ enabled: false, likeOn: true }, null, 2));
 }
 
-// ============================================================
-// RANDOM EMOJIS FOR LIKES
-// ============================================================
-const LIKE_EMOJIS = [
-    '❤️', '🔥', '👍', '💯', '✨', '🌟', '⭐', '💖', '💗', '💓',
-    '💕', '💞', '💝', '💟', '❣️', '💋', '😍', '🥰', '😘', '🤩',
-    '🎉', '🏆', '👏', '🙌', '🤗', '😊', '😎', '👌', '💪', '🎯',
-    '🔱', '⚡', '💎', '👑', '⭐', '🌹', '🌸', '💐', '🍀', '🌈'
-];
+const LIKE_EMOJIS = ['❤️', '🔥', '👍', '💯', '✨', '🌟', '⭐', '💖', '💗', '💓', '💕', '💞', '💝', '💟', '❣️', '💋', '😍', '🥰', '😘', '🤩', '🎉', '🏆', '👏', '🙌', '🤗', '😊', '😎', '👌', '💪', '🎯', '🔱', '⚡', '💎', '👑', '🌹', '🌸', '💐'];
 
 const getRandomLikeEmoji = () => LIKE_EMOJIS[Math.floor(Math.random() * LIKE_EMOJIS.length)];
+const QUOTES = ["Auto status is watching! 👀", "Status viewer mode: ACTIVE", "Liking statuses like a boss! 👑"];
 
-// ============================================================
-// QUOTES
-// ============================================================
-const QUOTES = [
-    "I'm not lazy, I'm just on my energy saving mode.",
-    "Life is short, smile while you still have teeth.",
-    "Auto status is watching! 👀",
-    "Status viewer mode: ACTIVE",
-    "Keeping up with your stories! 📸",
-    "Bot is lurking on statuses... 👻",
-    "Liking statuses like a boss! 👑"
-];
-
-const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
-
-// ============================================================
-// SEND WITH IMAGE AND FORWARDED MARK
-// ============================================================
-
-async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
+async function sendForwardedMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
-        const imageFullPath = path.join(process.cwd(), botImagePath);
-        const imageExists = fs.existsSync(imageFullPath);
-        
-        if (imageExists) {
-            await sock.sendMessage(chatId, {
-                image: fs.readFileSync(imageFullPath),
-                caption: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        } else {
-            await sock.sendMessage(chatId, {
-                text: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        }
-    } catch (error) {
         await sock.sendMessage(chatId, {
             text: text,
+            contextInfo: channelInfo.contextInfo,
             mentions: mentions
         }, { quoted: quoted });
+    } catch (error) {
+        await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
     }
 }
 
-// ============================================================
-// CONFIG FUNCTIONS
-// ============================================================
-
 async function readConfig() {
     try {
-        const data = fs.readFileSync(AUTO_STATUS_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        return { enabled: false, reactOn: false, likeOn: true };
+        return JSON.parse(fs.readFileSync(AUTO_STATUS_FILE, 'utf8'));
+    } catch {
+        return { enabled: false, likeOn: true };
     }
 }
 
@@ -110,286 +45,77 @@ async function writeConfig(config) {
     try {
         fs.writeFileSync(AUTO_STATUS_FILE, JSON.stringify(config, null, 2));
         return true;
-    } catch (error) {
-        console.error('Error writing auto status config:', error);
+    } catch {
         return false;
     }
 }
-
-async function isAutoStatusEnabled() {
-    const config = await readConfig();
-    return config.enabled;
-}
-
-async function isStatusReactionEnabled() {
-    const config = await readConfig();
-    return config.reactOn || false;
-}
-
-async function isStatusLikeEnabled() {
-    const config = await readConfig();
-    return config.likeOn || false;
-}
-
-// ============================================================
-// REAL LIKE FUNCTION
-// ============================================================
-
-async function likeStatus(sock, statusKey) {
-    try {
-        const likeEnabled = await isStatusLikeEnabled();
-        if (!likeEnabled) return false;
-        
-        const randomEmoji = getRandomLikeEmoji();
-        
-        await sock.relayMessage('status@broadcast', {
-            reactionMessage: {
-                key: {
-                    remoteJid: 'status@broadcast',
-                    id: statusKey.id,
-                    participant: statusKey.participant || statusKey.remoteJid,
-                    fromMe: false
-                },
-                text: randomEmoji
-            }
-        }, {
-            messageId: statusKey.id,
-            statusJidList: [statusKey.remoteJid, statusKey.participant || statusKey.remoteJid]
-        });
-        
-        console.log(`✅ Liked status with ${randomEmoji}`);
-        return true;
-    } catch (error) {
-        console.error('❌ Error liking status:', error.message);
-        return false;
-    }
-}
-
-// ============================================================
-// MAIN HANDLER
-// ============================================================
 
 export async function handleStatusUpdate(sock, status) {
     try {
-        const enabled = await isAutoStatusEnabled();
-        if (!enabled) return;
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        const config = await readConfig();
+        if (!config.enabled) return;
+        await new Promise(r => setTimeout(r, 2000));
         
         let statusKey = null;
-        
-        if (status.messages && status.messages.length > 0) {
-            const msg = status.messages[0];
-            if (msg.key && msg.key.remoteJid === 'status@broadcast') {
-                statusKey = msg.key;
-            }
-        }
-        
-        if (!statusKey && status.key && status.key.remoteJid === 'status@broadcast') {
-            statusKey = status.key;
-        }
-        
-        if (!statusKey && status.reaction && status.reaction.key && status.reaction.key.remoteJid === 'status@broadcast') {
-            statusKey = status.reaction.key;
-        }
-        
+        if (status.messages?.[0]?.key?.remoteJid === 'status@broadcast') statusKey = status.messages[0].key;
+        else if (status.key?.remoteJid === 'status@broadcast') statusKey = status.key;
+        else if (status.reaction?.key?.remoteJid === 'status@broadcast') statusKey = status.reaction.key;
         if (!statusKey) return;
         
         try {
             await sock.readMessages([statusKey]);
-            console.log('✅ Viewed status');
-        } catch (err) {
-            if (err.message?.includes('rate-overlimit')) {
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                await sock.readMessages([statusKey]);
-            } else {
-                console.error('Error viewing status:', err.message);
+            if (config.likeOn) {
+                await sock.relayMessage('status@broadcast', {
+                    reactionMessage: { key: statusKey, text: getRandomLikeEmoji() }
+                }, { messageId: statusKey.id });
             }
-        }
-        
-        await likeStatus(sock, statusKey);
-        
-    } catch (error) {
-        console.error('❌ Error in auto status view:', error.message);
-    }
+        } catch (err) { console.log(err.message); }
+    } catch (error) {}
 }
-
-// ============================================================
-// COMMAND - Fixed Owner Check
-// ============================================================
 
 export default {
     name: 'autostatus',
-    description: 'Automatically view and like WhatsApp statuses',
+    description: 'Auto view and like statuses',
     icon: '👁️',
-    alias: ['autoview', 'statusview', 'astatus', 'autolike'],
+    alias: ['astatus', 'autolike'],
     category: 'automation',
-    ownerOnly: true,  // This property should be respected by the command handler
+    ownerOnly: true,
     
-    async execute(sock, msg, args, currentPrefix, { BOT_NAME, VERSION, isOwner, jidManager }) {
-        
+    async execute(sock, msg, args, currentPrefix, { isOwner, jidManager }) {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        // ============================================================
-        // FIX: Proper owner check using isOwner function
-        // ============================================================
         const ownerCheck = await isOwner(senderId, jidManager);
-        
         if (!ownerCheck.isOwner) {
-            const notAuthMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Owner only command!
-╰──────❍
-
-_📌 This command is only for bot owner_
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, notAuthMsg, [senderId], msg);
+            await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍\n├ ❌ Owner only command!\n╰──────❍`, [senderId], msg);
             return;
         }
-        
-        // Get current time
-        const now = moment().tz('Africa/Dar_es_Salaam');
-        const date = now.format('DD/MM/YYYY');
-        const day = now.format('dddd');
-        const time = now.format('HH:mm:ss');
         
         const config = await readConfig();
-        const randomQuote = getRandomQuote();
-        const botName = BOT_NAME || 'MDINYANE';
-        
         const action = args[0]?.toLowerCase();
+        const now = moment().tz('Africa/Dar_es_Salaam');
         
-        // ========== SHOW STATUS (default) ==========
-        if (!action) {
-            const viewStatus = config.enabled ? '✅ ENABLED' : '❌ DISABLED';
-            const likeStatus = config.likeOn ? '✅ ENABLED' : '❌ DISABLED';
-            const reactStatus = config.reactOn ? '✅ ENABLED' : '❌ DISABLED';
-            
-            const statusMsg = `╭──❍「 *👁️ AUTO STATUS CONFIG* 」❍
-├ 📱 *Auto View* : ${viewStatus}
-├ 💖 *Auto Like* : ${likeStatus}
-├ 💫 *Auto React* : ${reactStatus}
-├ 💾 *Storage* : File System
+        if (!action || action === 'status') {
+            await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍
+├ 📝 *Status* : ${config.enabled ? '✅ ENABLED' : '❌ DISABLED'}
+├ 💖 *Auto Like* : ${config.likeOn ? '✅' : '❌'}
+├ 📅 *Date* : ${now.format('DD/MM/YYYY')}
+├ ⏰ *Time* : ${now.format('HH:mm:ss')} EAT
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${currentPrefix}autostatus on - Enable auto view
-│ 🔧 ${currentPrefix}autostatus off - Disable auto view
-│ 🔧 ${currentPrefix}autostatus like on - Enable auto like
-│ 🔧 ${currentPrefix}autostatus like off - Disable auto like
-╰──────❍
-╭─┴─❍「 *📊 INFO* 」❍
-├ 📅 *Date* : ${date}
-├ 📆 *Day* : ${day}
-├ ⏰ *Time* : ${time} EAT
-├ 💖 *Like Emojis* : ${LIKE_EMOJIS.length} random emojis
-╰──────❍
-
-✨ *"${randomQuote}"* ✨
-
-_📌 Bot will automatically view and like statuses with random emojis!_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, statusMsg, [], msg);
+│ 🔧 ${currentPrefix}autostatus on - Enable
+│ 🔧 ${currentPrefix}autostatus off - Disable
+│ 🔧 ${currentPrefix}autostatus like on/off - Toggle like
+╰──────❍`, [], msg);
             return;
         }
         
-        // ========== ENABLE AUTO VIEW ==========
-        if (action === 'on') {
-            config.enabled = true;
-            await writeConfig(config);
-            
-            const successMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ✅ *Auto View* : ENABLED
-├ 📝 *Bot will now view all statuses*
-╰──────❍
-
-✨ *"${randomQuote}"* ✨
-
-_📌 Auto Like: ${config.likeOn ? 'ON' : 'OFF'}_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, successMsg, [], msg);
-            return;
+        if (action === 'on') { config.enabled = true; await writeConfig(config); await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍\n├ ✅ ENABLED\n╰──────❍`, [], msg); }
+        else if (action === 'off') { config.enabled = false; await writeConfig(config); await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍\n├ ❌ DISABLED\n╰──────❍`, [], msg); }
+        else if (action === 'like') {
+            const sub = args[1]?.toLowerCase();
+            if (sub === 'on') { config.likeOn = true; await writeConfig(config); await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍\n├ 💖 Auto Like ENABLED\n╰──────❍`, [], msg); }
+            else if (sub === 'off') { config.likeOn = false; await writeConfig(config); await sendForwardedMessage(sock, chatId, `╭──❍「 *👁️ AUTO STATUS* 」❍\n├ 💖 Auto Like DISABLED\n╰──────❍`, [], msg); }
         }
-        
-        // ========== DISABLE AUTO VIEW ==========
-        if (action === 'off') {
-            config.enabled = false;
-            await writeConfig(config);
-            
-            const disableMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Auto View* : DISABLED
-├ 📝 *Bot will no longer view statuses*
-╰──────❍
-
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, disableMsg, [], msg);
-            return;
-        }
-        
-        // ========== LIKE COMMANDS ==========
-        if (action === 'like') {
-            const likeAction = args[1]?.toLowerCase();
-            
-            if (!likeAction || (likeAction !== 'on' && likeAction !== 'off')) {
-                const usageMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Usage* : ${currentPrefix}autostatus like on|off
-├ 📝 *Example* : ${currentPrefix}autostatus like on
-╰──────❍
-
-_📌 Enable or disable real likes to statuses with random emojis_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, usageMsg, [], msg);
-                return;
-            }
-            
-            if (likeAction === 'on') {
-                config.likeOn = true;
-                await writeConfig(config);
-                
-                const likeOnMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ 💖 *Auto Like* : ENABLED
-├ 📝 *Bot will like statuses with random emojis*
-├ 🎲 *Emojis* : ${LIKE_EMOJIS.slice(0, 5).join(', ')}...
-╰──────❍
-
-✨ *"${randomQuote}"* ✨
-
-_📌 Example emojis: ❤️ 🔥 👍 💯 ✨_
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, likeOnMsg, [], msg);
-            } else {
-                config.likeOn = false;
-                await writeConfig(config);
-                
-                const likeOffMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Auto Like* : DISABLED
-├ 📝 *Bot will not like statuses*
-╰──────❍
-
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, likeOffMsg, [], msg);
-            }
-            return;
-        }
-        
-        // ========== INVALID COMMAND ==========
-        const invalidMsg = `╭──❍「 *👁️ AUTO STATUS* 」❍
-├ ❌ *Invalid command* : ${action}
-├ 📝 *Use* : ${currentPrefix}autostatus for help
-╰──────❍
-
-▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
-        await sendStyledMessage(sock, chatId, invalidMsg, [], msg);
     }
-};
-
-// Export functions for use in index.js
-export { 
-    isAutoStatusEnabled, 
-    isStatusReactionEnabled, 
-    isStatusLikeEnabled,
-    likeStatus,
-    readConfig, 
-    writeConfig,
-    getRandomLikeEmoji
 };
