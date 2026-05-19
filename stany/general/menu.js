@@ -299,7 +299,7 @@ export default {
         menu += `├ 🏷️ *Name* : ${msg.pushName || 'No Name'}\n`;
         menu += `├ 👑 *Role* : ${isOwnerUser ? 'OWNER 👑' : 'USER 👤'}\n`;
         menu += `├ 💎 *Status* : ${userStatus.status}\n`;
-        menu += `├ 📱 *Number* : ${sender.split('@')[0]}\n`;
+        menu += `├ 📱 *Your Number:* +${ownerInfo.ownerNumber}
         menu += `╰─┬────❍\n`;
         
         // Bot Info
