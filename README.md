@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:000000,100:001a1a&height=200&section=header&text=LEGEND-BOT&fontSize=70&fontColor=00ffcc&animation=fadeIn"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:000000,100:001a1a&height=200&section=header&text=MDINYANE-BOT&fontSize=70&fontColor=00ffcc&animation=fadeIn"/>
 
 #   MDINYANE  BOT SYSTEM 
 
