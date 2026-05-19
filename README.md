@@ -20,7 +20,7 @@
 
 </div>
 
----
+
 
 ## 🧠 FEATURES
 
@@ -33,7 +33,7 @@
 - 🔌 Auto Plugin Loader  
 - 🌍 Deploy Anywhere  
 
----
+
 
 <div align="center">
 
@@ -84,7 +84,7 @@
 - 🌍 **Deploy Anywhere** – Heroku, Render, Railway, Koyeb, Fly.io, VPS, Termux, Docker.
 - 💾 **Multi Database Support** – MongoDB, PostgreSQL, MySQL, SQLite, or JSON files.
 
----
+
 
 ## 📦 Quick Start
 
@@ -97,7 +97,7 @@ cp sample.env .env
 npm start
 ```
 
----
+
 
 🔐 Session Setup
 
@@ -108,7 +108,7 @@ SESSION_ID=stanytz378/iamlegendv2_xxxxxx
 OWNER_NUMBER=255787069580
 ```
 
----
+
 
 ⚙️ Configuration
 
@@ -117,13 +117,10 @@ Edit .env file:
 ```env
 BOT_NAME=MDINYANE
 BOT_OWNER=STANYTZ
-PREFIXES=.,!,/
 COMMAND_MODE=public
-TIMEZONE=Africa/Nairobi
-MONGO_URL=     # Optional
 ```
 
----
+
 
 🖥️ VPS (Linux Server)
 
