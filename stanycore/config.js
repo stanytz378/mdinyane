@@ -16,7 +16,7 @@ const defaultConfig = {
     ownerName: 'STANY TZ',
     prefixes: ['.'],
     prefixless: true,
-    mode: 'public',
+    mode: 'private',
     sessionId: '',
     // Auto Typing
     autoTyping: true,
