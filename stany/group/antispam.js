@@ -25,6 +25,7 @@ const __dirname = path.dirname(__filename);
 // Data directory
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTISPAM_FILE = path.join(DATA_DIR, 'antispam_settings.json');
+const SILENT_MODE_FILE = path.join(DATA_DIR, 'antispam_silent.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -65,33 +66,51 @@ const DEFAULT_CONFIG = {
 };
 
 // ============================================================
-// SEND WITH IMAGE AND FORWARDED MARK
+// SEND MESSAGE (TEXT ONLY - NO IMAGE)
 // ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
-        const imageFullPath = path.join(process.cwd(), botImagePath);
-        const imageExists = fs.existsSync(imageFullPath);
-        
-        if (imageExists) {
-            await sock.sendMessage(chatId, {
-                image: fs.readFileSync(imageFullPath),
-                caption: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        } else {
-            await sock.sendMessage(chatId, {
-                text: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        }
+        await sock.sendMessage(chatId, {
+            text: text,
+            contextInfo: channelInfo.contextInfo,
+            mentions: mentions
+        }, { quoted: quoted });
     } catch (error) {
         await sock.sendMessage(chatId, {
             text: text,
             mentions: mentions
         }, { quoted: quoted });
+    }
+}
+
+// ============================================================
+// SILENT MODE FUNCTIONS
+// ============================================================
+
+async function getSilentMode(groupId) {
+    try {
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+            return data[groupId] || false;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function setSilentMode(groupId, enabled) {
+    try {
+        let data = {};
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+        }
+        data[groupId] = enabled;
+        fs.writeFileSync(SILENT_MODE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
     }
 }
 
@@ -206,6 +225,7 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
         
         const now = Date.now();
         const windowMs = groupConfig.windowSeconds * 1000;
+        const isSilent = await getSilentMode(chatId);
         
         if (!spamTracker.has(chatId)) spamTracker.set(chatId, new Map());
         const groupTracker = spamTracker.get(chatId);
@@ -240,20 +260,24 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
             const warnsLeft = groupConfig.warnCount - userData.warns;
             
             if (warnsLeft > 0) {
-                const warnMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+                if (!isSilent) {
+                    const warnMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ ⚠️ Warning ${userData.warns}/${groupConfig.warnCount}
 ├ 📝 ${warnsLeft} more warning(s) left
+├ 📊 ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+                }
             } else {
                 userData.warns = 0;
                 if (!isBotAdmin) {
-                    const noAdminMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+                    if (!isSilent) {
+                        const noAdminMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ ⚠️ Max warnings reached
 ├ ❌ Make me admin to kick!
@@ -262,19 +286,22 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, noAdminMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, noAdminMsg, [senderId], message);
+                    }
                 } else {
                     await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
-                    const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+                    if (!isSilent) {
+                        const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ 🚫 KICKED
-├ 📝 Repeated spamming
+├ 📝 Repeated spamming (${groupConfig.warnCount} warnings)
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
+                    }
                 }
             }
             return true;
@@ -283,7 +310,8 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
         // ========== KICK ACTION ==========
         if (groupConfig.action === 'kick') {
             if (!isBotAdmin) {
-                const noAdminKickMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+                if (!isSilent) {
+                    const noAdminKickMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ 🚫 Spam detected
 ├ ❌ Make me admin to kick!
@@ -292,10 +320,12 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, noAdminKickMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, noAdminKickMsg, [senderId], message);
+                }
             } else {
                 await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
-                const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+                if (!isSilent) {
+                    const kickedMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ 🚫 KICKED
 ├ 📝 Spamming (${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s)
@@ -304,7 +334,8 @@ export async function handleAntiSpam(sock, chatId, message, senderId, senderIsOw
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickedMsg, [senderId], message);
+                }
             }
             return true;
         }
@@ -378,6 +409,9 @@ _📌 Contact group admin for assistance_
         const isBotAdmin = isParticipantAdmin(participants, botId);
         
         const action = args[0]?.toLowerCase();
+        const isSilent = await getSilentMode(chatId);
+        const silentIcon = isSilent ? '🔇' : '🔊';
+        const silentText = isSilent ? 'SILENT (no messages)' : 'NORMAL (with warnings)';
         
         // ========== SHOW STATUS (default) ==========
         if (!action || action === 'status') {
@@ -386,11 +420,12 @@ _📌 Contact group admin for assistance_
             const actionText = groupConfig.action.toUpperCase();
             
             const statusMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
-├ 📵 Status : ${statusIcon} ${statusText}
-├ ⚡ Limit : ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
-├ 🚫 Action : ${actionText}
-├ ⚠️ Warn Limit : ${groupConfig.warnCount} warns
-├ 🤖 Bot Admin : ${isBotAdmin ? '✅' : '❌'}
+├ 📵 *Status* : ${statusIcon} ${statusText}
+├ ${silentIcon} *Mode* : ${silentText}
+├ ⚡ *Limit* : ${groupConfig.maxMessages} msgs in ${groupConfig.windowSeconds}s
+├ 🚫 *Action* : ${actionText}
+├ ⚠️ *Warn Limit* : ${groupConfig.warnCount} warns
+├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}antispam on - Enable
@@ -398,19 +433,47 @@ _📌 Contact group admin for assistance_
 │ 🔧 ${currentPrefix}antispam set <msgs> <secs> - Set limit
 │ 🔧 ${currentPrefix}antispam action warn/kick - Set action
 │ 🔧 ${currentPrefix}antispam warns <num> - Set warn limit
+│ 🔧 ${currentPrefix}antispam silent - Toggle silent mode
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 ${date}
 ├ 📆 ${day}
 ├ ⏰ ${time} EAT
-├ 👑 Exempt : Admins & Owner
+├ 👑 *Exempt* : Admins & Owner
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
 
-_📌 Admins and Owner are EXEMPT_
+_📌 Admins and Owner are EXEMPT from antispam_
 ▰▰▰ *©️ ${botName.toUpperCase()} BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, statusMsg, [], msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (action === 'silent') {
+            if (!groupConfig.enabled) {
+                const notEnabledMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ ❌ *Error* : Antispam is not enabled!
+├ 📝 *First enable with* : ${currentPrefix}antispam on
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, notEnabledMsg, [], msg);
+                return;
+            }
+            
+            const currentSilent = await getSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setSilentMode(chatId, newSilent);
+            
+            const silentMsg = `╭──❍「 *🛡️ ANTISPAM* 」❍
+├ 🔇 *Silent Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Spam actions silent - No messages sent' : 'Spam actions with warning messages'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, silentMsg, [], msg);
             return;
         }
         
@@ -584,6 +647,6 @@ _📌 Make bot admin for full protection_
 };
 
 // ============================================================
-// SINGLE EXPORT - NO DUPLICATES
+// EXPORTS
 // ============================================================
-export { getGroupConfig, setGroupConfig, removeGroupConfig };
+export { getGroupConfig, setGroupConfig, removeGroupConfig, getSilentMode, setSilentMode };
