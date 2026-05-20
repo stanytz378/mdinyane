@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
-import { channelInfo, botImagePath } from '../../stanytz/messageConfig.js';
+import { channelInfo } from '../../stanytz/messageConfig.js';
 import isAdmin from '../../stanymain/isAdmin.js';
 import isOwner from '../../stanymain/isOwner.js';
 import isGroup from '../../stanymain/isGroup.js';
