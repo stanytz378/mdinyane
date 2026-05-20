@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import moment from 'moment-timezone';
-import { channelInfo } from '../../stanytz/messageConfig.js';
+import { channelInfo, } from '../../stanytz/messageConfig.js';
 import isAdmin from '../../stanymain/isAdmin.js';
 import isOwner from '../../stanymain/isOwner.js';
 import isGroup from '../../stanymain/isGroup.js';
@@ -48,6 +48,9 @@ const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
 // Warning counts storage
 const WARNINGS_FILE = path.join(process.cwd(), 'stanydata', 'antilink_warnings.json');
+
+// Silent mode storage
+const SILENT_MODE_FILE = path.join(process.cwd(), 'stanydata', 'antilink_silent.json');
 
 async function getWarnings(groupId, userId) {
     try {
@@ -86,6 +89,33 @@ async function resetWarnings(groupId, userId) {
             }
         }
     } catch {}
+}
+
+// Silent mode functions
+async function getSilentMode(groupId) {
+    try {
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+            return data[groupId] || false;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function setSilentMode(groupId, enabled) {
+    try {
+        let data = {};
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+        }
+        data[groupId] = enabled;
+        fs.writeFileSync(SILENT_MODE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 // ============================================================
@@ -147,6 +177,7 @@ export async function handleLinkDetection(sock, chatId, message, userMessage, se
         
         const action = settings.action || 'delete';
         const randomQuote = getRandomQuote();
+        const isSilent = await getSilentMode(chatId);
         
         // Delete the link message
         try {
@@ -156,7 +187,8 @@ export async function handleLinkDetection(sock, chatId, message, userMessage, se
         // ========== KICK ACTION ==========
         if (action === 'kick') {
             if (!adminCheck.isBotAdmin) {
-                const kickErrorMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+                if (!isSilent) {
+                    const kickErrorMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ ❌ *Error* : Make me admin to kick!
@@ -166,12 +198,14 @@ export async function handleLinkDetection(sock, chatId, message, userMessage, se
 
 _📌 Please promote bot to admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickErrorMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickErrorMsg, [senderId], message);
+                }
                 return;
             }
             try {
                 await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
-                const kickMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+                if (!isSilent) {
+                    const kickMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ 🚫 *Action* : KICKED
@@ -181,9 +215,11 @@ _📌 Please promote bot to admin for full protection_
 
 _📌 Links are not allowed in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                }
             } catch (error) {
-                const kickFailMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+                if (!isSilent) {
+                    const kickFailMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ ❌ *Error* : Failed to kick user
@@ -193,7 +229,8 @@ _📌 Links are not allowed in this group_
 
 _📌 Check my permissions and try again_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                }
             }
             return;
         }
@@ -207,7 +244,8 @@ _📌 Check my permissions and try again_
                 await resetWarnings(chatId, senderId);
                 if (adminCheck.isBotAdmin) {
                     await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
-                    const kickAfterWarnMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+                    if (!isSilent) {
+                        const kickAfterWarnMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ ⚠️ *Warns* : ${warnCount}/3
@@ -218,9 +256,11 @@ _📌 Check my permissions and try again_
 
 _📌 User has been kicked after 3 warnings_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                    }
                 } else {
-                    const noKickMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+                    if (!isSilent) {
+                        const noKickMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ ⚠️ *Warns* : ${warnCount}/3
@@ -231,12 +271,14 @@ _📌 User has been kicked after 3 warnings_
 
 _📌 User has reached warning limit_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                    }
                 }
                 return;
             }
             
-            const warnMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+            if (!isSilent) {
+                const warnMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ ⚠️ *Warning* : ${warnCount}/3
@@ -247,13 +289,16 @@ _📌 User has reached warning limit_
 
 _📌 Next violation may result in a kick_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+                await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+            }
             return;
         }
         
         // ========== DELETE ACTION (default) ==========
         if (action === 'delete') {
-            const deleteMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+            // Only send message if silent mode is OFF
+            if (!isSilent) {
+                const deleteMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🔗 *Link* : ${linkType}
 ├ 🗑️ *Action* : Message deleted
@@ -263,7 +308,10 @@ _📌 Next violation may result in a kick_
 
 _📌 Links are not allowed in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+                await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+            }
+            // If silent mode is ON, do absolutely nothing - just delete and exit
+            return;
         }
         
     } catch (error) {
@@ -335,20 +383,26 @@ _📌 Contact group admin for assistance_
         // ========== SHOW STATUS (default) ==========
         if (!action) {
             const settings = await getAntilinkSetting(chatId);
+            const isSilent = await getSilentMode(chatId);
             const statusIcon = settings.enabled ? '✅' : '❌';
             const actionText = (settings.action || 'delete').toUpperCase();
+            const silentIcon = isSilent ? '🔇' : '🔊';
+            const silentText = isSilent ? 'SILENT (no messages)' : 'NORMAL (with warnings)';
             
             const statusMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
 ├ 📵 *Status* : ${statusIcon} ${settings.enabled ? 'ENABLED' : 'DISABLED'}
 ├ ⚡ *Action* : ${actionText}
+├ ${silentIcon} *Mode* : ${silentText}
 ├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}antilink on - Enable protection
 │ 🔧 ${currentPrefix}antilink off - Disable protection
-│ 🔧 ${currentPrefix}antilink delete - Delete only
+│ 🔧 ${currentPrefix}antilink delete - Delete + warnings
+│ 🔧 ${currentPrefix}antilink delete silent - Delete silently (no messages)
 │ 🔧 ${currentPrefix}antilink warn - Warn then kick
 │ 🔧 ${currentPrefix}antilink kick - Kick immediately
+│ 🔧 ${currentPrefix}antilink silent - Toggle silent mode
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 *Date* : ${date}
@@ -408,22 +462,90 @@ _📌 Links will now be deleted automatically_
         }
         
         // ========== SET ACTION ==========
-        if (action === 'delete' || action === 'warn' || action === 'kick') {
-            await setAntilinkSetting(chatId, action);
+        if (action === 'delete') {
+            await setAntilinkSetting(chatId, 'delete');
             
-            const actionDesc = {
-                delete: 'Delete link messages',
-                warn: 'Warn users (3 warnings then kick)',
-                kick: 'Kick users immediately'
-            };
+            // Check if user wants silent mode
+            const silentMode = args[1]?.toLowerCase() === 'silent';
+            await setSilentMode(chatId, silentMode);
             
             const actionSetMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
-├ ✅ *Action* : Set to ${action.toUpperCase()}
-├ 📝 *Description* : ${actionDesc[action]}
+├ ✅ *Action* : Set to DELETE
+├ 🔇 *Mode* : ${silentMode ? 'SILENT (no messages)' : 'NORMAL (with warnings)'}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        if (action === 'warn') {
+            await setAntilinkSetting(chatId, 'warn');
+            // Reset silent mode when switching to warn
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+├ ✅ *Action* : Set to WARN
+├ 📝 *Description* : Warn users (3 warnings then kick)
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        if (action === 'kick') {
+            await setAntilinkSetting(chatId, 'kick');
+            // Reset silent mode when switching to kick
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+├ ✅ *Action* : Set to KICK
+├ 📝 *Description* : Kick users immediately
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (action === 'silent') {
+            const currentSettings = await getAntilinkSetting(chatId);
+            if (!currentSettings.enabled) {
+                const notEnabledMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+├ ❌ *Error* : Antilink is not enabled!
+├ 📝 *First enable with* : ${currentPrefix}antilink on
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, notEnabledMsg, [], msg);
+                return;
+            }
+            
+            if (currentSettings.action !== 'delete') {
+                const wrongActionMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+├ ❌ *Error* : Silent mode only works with DELETE action!
+├ 📝 *Current action* : ${currentSettings.action.toUpperCase()}
+├ 🔧 *Use* : ${currentPrefix}antilink delete
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, wrongActionMsg, [], msg);
+                return;
+            }
+            
+            const currentSilent = await getSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setSilentMode(chatId, newSilent);
+            
+            const silentMsg = `╭──❍「 *🔗 ANTILINK PROTECTION* 」❍
+├ 🔇 *Silent Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Links deleted silently - No messages sent' : 'Links deleted with warning messages'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, silentMsg, [], msg);
             return;
         }
         
