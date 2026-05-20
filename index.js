@@ -118,6 +118,8 @@ import { handleAntiReaction } from './stanymedia/antireaction.js';
 // STANY OWNER
 import { handleCall } from './stany/owner/anticall.js';
 import { storeMessage, handleMessageRevocation } from './stany/owner/antidelete.js';
+import { handleAutoTyping, stopTyping } from './stany/owner/autotyping.js';
+import { handleAutoRecording } from './stany/owner/autorecording.js';
 
 // SESSION
 import SaveCreds from './mdinyane/session.js';
@@ -164,6 +166,10 @@ const GROUP_INVITE_CODE = GROUP_LINK.split('/').pop();
 const GROUP_NAME = 'STANYTZ TEAM';
 const AUTO_JOIN_LOG_FILE = './auto_join_log.json';
 const BOT_IMAGE_PATH = './stanytz/B803A026-2887-4715-8FE6-05E82D801427.png';
+
+// Auto typing settings
+const AUTO_TYPING_ENABLED = true;
+const AUTO_RECORDING_ENABLED = true;
 
 // ============================================================
 // CACHE SYSTEMS
@@ -434,6 +440,8 @@ function updateTerminalHeader() {
 ║   🛡️ Rate Limit Protection: ✅ ACTIVE
 ║   🔗 Auto-Connect on Link: ${AUTO_CONNECT_ON_LINK ? '✅' : '❌'}
 ║   🔐 Login Methods: Pairing Code | Session ID
+║   ⌨️ Auto Typing: ${AUTO_TYPING_ENABLED ? '✅' : '❌'}
+║   🎙️ Auto Recording: ${AUTO_RECORDING_ENABLED ? '✅' : '❌'}
 ╚══════════════════════════════════════════════════════════════════════╝
 `));
 }
@@ -1360,6 +1368,13 @@ async function startBot(loginMode = 'pair', loginData = null) {
             const senderJid = msg.key.participant || chatId;
             const textMsg = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             
+            // ============================================================
+            // AUTO TYPING & RECORDING - Show typing BEFORE processing
+            // ============================================================
+            if (AUTO_TYPING_ENABLED) {
+                await handleAutoTyping(sock, chatId, senderJid);
+            }
+            
             // Check if user is banned
             try {
                 const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8'));
@@ -1387,6 +1402,14 @@ async function startBot(loginMode = 'pair', loginData = null) {
             }
             
             await handleIncomingMessage(sock, msg);
+            
+            // ============================================================
+            // AUTO RECORDING - Show recording AFTER processing
+            // ============================================================
+            if (AUTO_RECORDING_ENABLED) {
+                await stopTyping(sock, chatId);
+                await handleAutoRecording(sock, chatId, senderJid);
+            }
         });
         
         sock.ev.on('reactions.update', async (reactions) => {
