@@ -12,9 +12,39 @@ import isGroup from '../../stanymain/isGroup.js';
 
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const MUTE_FILE = path.join(DATA_DIR, 'muted_users.json');
+const MUTE_SILENT_FILE = path.join(DATA_DIR, 'mute_silent.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(MUTE_FILE)) fs.writeFileSync(MUTE_FILE, JSON.stringify({}, null, 2));
+if (!fs.existsSync(MUTE_SILENT_FILE)) fs.writeFileSync(MUTE_SILENT_FILE, JSON.stringify({}, null, 2));
+
+// ============================================================
+// SILENT MODE FUNCTIONS
+// ============================================================
+
+async function getMuteSilentMode(chatId) {
+    try {
+        const data = JSON.parse(fs.readFileSync(MUTE_SILENT_FILE, 'utf8'));
+        return data[chatId] || false;
+    } catch {
+        return false;
+    }
+}
+
+async function setMuteSilentMode(chatId, enabled) {
+    try {
+        const data = JSON.parse(fs.readFileSync(MUTE_SILENT_FILE, 'utf8'));
+        data[chatId] = enabled;
+        fs.writeFileSync(MUTE_SILENT_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// ============================================================
+// MUTE FUNCTIONS
+// ============================================================
 
 function getTargetId(msg, args) {
     const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -125,8 +155,30 @@ async function getMuteInfo(chatId, userId) {
     }
 }
 
+async function getAllMutedUsers(chatId) {
+    try {
+        const data = JSON.parse(fs.readFileSync(MUTE_FILE, 'utf8'));
+        const mutedUsers = data[chatId] || [];
+        const validUsers = [];
+        
+        for (const user of mutedUsers) {
+            if (user.expiresAt) {
+                const expiresAt = new Date(user.expiresAt);
+                if (expiresAt > new Date()) {
+                    validUsers.push(user);
+                }
+            } else {
+                validUsers.push(user);
+            }
+        }
+        return validUsers;
+    } catch {
+        return [];
+    }
+}
+
 // ============================================================
-// MAIN HANDLER - Using the name expected by index.js
+// MAIN HANDLER - Muted message detection
 // ============================================================
 
 async function handleMutedMessages(sock, chatId, senderId, message) {
@@ -135,28 +187,32 @@ async function handleMutedMessages(sock, chatId, senderId, message) {
         if (!isMuted) return false;
         
         const muteInfo = await getMuteInfo(chatId, senderId);
+        const isSilent = await getMuteSilentMode(chatId);
         
+        // Delete the message
         try {
             await sock.sendMessage(chatId, { delete: message.key });
         } catch (e) {}
         
-        let timeLeft = '';
-        if (muteInfo?.expiresAt) {
-            const expiresAt = new Date(muteInfo.expiresAt);
-            const now = new Date();
-            const diffMs = expiresAt - now;
-            const diffMins = Math.ceil(diffMs / 60000);
-            const diffHours = Math.ceil(diffMs / 3600000);
-            const diffDays = Math.ceil(diffMs / 86400000);
+        // Only send notification if NOT silent mode
+        if (!isSilent) {
+            let timeLeft = '';
+            if (muteInfo?.expiresAt) {
+                const expiresAt = new Date(muteInfo.expiresAt);
+                const now = new Date();
+                const diffMs = expiresAt - now;
+                const diffMins = Math.ceil(diffMs / 60000);
+                const diffHours = Math.ceil(diffMs / 3600000);
+                const diffDays = Math.ceil(diffMs / 86400000);
+                
+                if (diffDays > 0) timeLeft = `${diffDays} day(s)`;
+                else if (diffHours > 0) timeLeft = `${diffHours} hour(s)`;
+                else timeLeft = `${diffMins} minute(s)`;
+            }
             
-            if (diffDays > 0) timeLeft = `${diffDays} day(s)`;
-            else if (diffHours > 0) timeLeft = `${diffHours} hour(s)`;
-            else timeLeft = `${diffMins} minute(s)`;
-        }
-        
-        const nowTime = moment().tz('Africa/Dar_es_Salaam');
-        
-        const muteMsg = `╭──❍「 *🔇 USER MUTED* 」❍
+            const nowTime = moment().tz('Africa/Dar_es_Salaam');
+            
+            const muteMsg = `╭──❍「 *🔇 USER MUTED* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 📝 *Reason* : ${muteInfo?.reason || 'Violating group rules'}
 ├ ⏰ *Time Left* : ${muteInfo?.expiresAt ? timeLeft : 'Permanent'}
@@ -166,12 +222,13 @@ async function handleMutedMessages(sock, chatId, senderId, message) {
 
 _📌 You cannot send messages until your mute expires_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-        
-        await sock.sendMessage(chatId, {
-            text: muteMsg,
-            contextInfo: channelInfo.contextInfo,
-            mentions: [senderId]
-        });
+            
+            await sock.sendMessage(chatId, {
+                text: muteMsg,
+                contextInfo: channelInfo.contextInfo,
+                mentions: [senderId]
+            });
+        }
         
         return true;
     } catch (error) {
@@ -190,6 +247,10 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
         await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
     }
 }
+
+// ============================================================
+// MAIN COMMAND
+// ============================================================
 
 export default {
     name: 'mute',
@@ -221,6 +282,52 @@ export default {
             return;
         }
         
+        const subCommand = args[0]?.toLowerCase();
+        
+        // ========== LIST MUTED USERS ==========
+        if (subCommand === 'list' || subCommand === 'muted') {
+            const mutedUsers = await getAllMutedUsers(chatId);
+            
+            if (mutedUsers.length === 0) {
+                await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTED USERS* 」❍
+├ 📝 No muted users in this group
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+                return;
+            }
+            
+            let mutedList = '';
+            for (let i = 0; i < mutedUsers.length; i++) {
+                const user = mutedUsers[i];
+                const userNum = user.userId.split('@')[0];
+                mutedList += `├ ${i + 1}. @${userNum} - ${user.duration}\n`;
+            }
+            
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTED USERS* 」❍
+${mutedList}╰──────❍
+
+_📌 Use ${currentPrefix}unmute <@user> to unmute_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, mutedUsers.map(u => u.userId), msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (subCommand === 'silent') {
+            const currentSilent = await getMuteSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setMuteSilentMode(chatId, newSilent);
+            
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE SILENT MODE* 」❍
+├ 🔇 *Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Muted users deleted silently - No warning messages' : 'Muted users get warning messages when trying to chat'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
+        
+        // ========== NORMAL MUTE COMMAND ==========
         let targetId = getTargetId(msg, args);
         
         if (!targetId) {
@@ -242,6 +349,10 @@ export default {
 │ 🔹 2h = 2 hours
 │ 🔹 1d = 1 day
 │ 🔹 permanent = Forever
+╰─┬────❍
+╭─┴─❍「 *🔇 OTHER COMMANDS* 」❍
+│ 🔧 ${currentPrefix}mute list - Show muted users
+│ 🔧 ${currentPrefix}mute silent - Toggle silent mode
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -258,6 +369,16 @@ export default {
         
         if (targetId === senderId) {
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍\n├ ❌ You cannot mute yourself!\n╰──────❍`, [], msg);
+            return;
+        }
+        
+        // Check if target is admin
+        const targetAdminCheck = await isAdmin(sock, chatId, targetId);
+        if (targetAdminCheck.isSenderAdmin && !ownerCheck.isOwner) {
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔇 MUTE* 」❍
+├ ❌ Cannot mute another admin!
+├ 👑 @${targetId.split('@')[0]} is an admin
+╰──────❍`, [targetId], msg);
             return;
         }
         
@@ -346,6 +467,7 @@ ${expiryText}
 _📌 Muted user cannot send messages until mute expires_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [targetId, senderId], msg);
         
+        // Notify the muted user privately
         try {
             let timeInfo = '';
             if (result.expiresAt) {
@@ -356,7 +478,7 @@ _📌 Muted user cannot send messages until mute expires_
             }
             
             const notifyMsg = `╭──❍「 *🔇 MUTED NOTIFICATION* 」❍
-├ 👤 *You have been muted*
+├ 👤 *You have been muted in group*
 ├ 📝 *Reason* : ${reason}
 ├ ⏱️ *Duration* : ${durationText}
 ${timeInfo}
@@ -368,6 +490,7 @@ _📌 You cannot send messages in the group until mute expires_
             await sock.sendMessage(targetId, { text: notifyMsg });
         } catch (e) {}
         
+        // Auto-unmute after expiry
         if (result.expiresAt) {
             const expiresAt = new Date(result.expiresAt);
             const timeUntilExpiry = expiresAt - new Date();
@@ -404,7 +527,7 @@ _📌 Welcome back!_
 };
 
 // ============================================================
-// EXPORTS - Using the names expected by index.js
+// EXPORTS
 // ============================================================
 
-export { handleMutedMessages, isUserMuted, removeMutedUser };
+export { handleMutedMessages, isUserMuted, removeMutedUser, getMuteSilentMode, setMuteSilentMode };
