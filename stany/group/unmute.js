@@ -12,6 +12,10 @@ import isGroup from '../../stanymain/isGroup.js';
 
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const MUTE_FILE = path.join(DATA_DIR, 'muted_users.json');
+const UNMUTE_LOG_FILE = path.join(DATA_DIR, 'unmute_log.json');
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ============================================================
 // GET TARGET USER ID (Reply, Tag, or Number)
@@ -43,26 +47,34 @@ function getTargetId(msg, args) {
 }
 
 // ============================================================
-// UNMUTE FUNCTIONS
+// DATABASE FUNCTIONS
 // ============================================================
 
 async function removeMutedUser(chatId, userId) {
     try {
+        if (!fs.existsSync(MUTE_FILE)) {
+            fs.writeFileSync(MUTE_FILE, JSON.stringify({}, null, 2));
+            return { success: true, wasMuted: false };
+        }
+        
         const data = JSON.parse(fs.readFileSync(MUTE_FILE, 'utf8'));
+        let wasMuted = false;
+        
         if (data[chatId]) {
-            const wasMuted = data[chatId].some(u => u.userId === userId);
+            wasMuted = data[chatId].some(u => u.userId === userId);
             data[chatId] = data[chatId].filter(u => u.userId !== userId);
             fs.writeFileSync(MUTE_FILE, JSON.stringify(data, null, 2));
-            return { success: true, wasMuted };
         }
-        return { success: true, wasMuted: false };
-    } catch {
+        return { success: true, wasMuted };
+    } catch (error) {
+        console.error('Error removing muted user:', error);
         return { success: false, wasMuted: false };
     }
 }
 
 async function getMuteInfo(chatId, userId) {
     try {
+        if (!fs.existsSync(MUTE_FILE)) return null;
         const data = JSON.parse(fs.readFileSync(MUTE_FILE, 'utf8'));
         const mutedUsers = data[chatId] || [];
         return mutedUsers.find(u => u.userId === userId);
@@ -70,6 +82,65 @@ async function getMuteInfo(chatId, userId) {
         return null;
     }
 }
+
+async function getAllMutedUsers(chatId) {
+    try {
+        if (!fs.existsSync(MUTE_FILE)) return [];
+        const data = JSON.parse(fs.readFileSync(MUTE_FILE, 'utf8'));
+        const mutedUsers = data[chatId] || [];
+        const validUsers = [];
+        
+        for (const user of mutedUsers) {
+            if (user.expiresAt) {
+                const expiresAt = new Date(user.expiresAt);
+                if (expiresAt > new Date()) {
+                    validUsers.push(user);
+                } else {
+                    // Clean up expired mutes
+                    await removeMutedUser(chatId, user.userId);
+                }
+            } else {
+                validUsers.push(user);
+            }
+        }
+        return validUsers;
+    } catch {
+        return [];
+    }
+}
+
+async function logUnmute(chatId, userId, mutedBy, unmutedBy, reason, originalDuration) {
+    try {
+        let logs = {};
+        if (fs.existsSync(UNMUTE_LOG_FILE)) {
+            logs = JSON.parse(fs.readFileSync(UNMUTE_LOG_FILE, 'utf8'));
+        }
+        
+        if (!logs[chatId]) logs[chatId] = [];
+        
+        logs[chatId].push({
+            userId: userId,
+            mutedBy: mutedBy,
+            unmutedBy: unmutedBy,
+            reason: reason,
+            originalDuration: originalDuration,
+            unmutedAt: new Date().toISOString()
+        });
+        
+        // Keep only last 100 logs per group
+        if (logs[chatId].length > 100) {
+            logs[chatId] = logs[chatId].slice(-100);
+        }
+        
+        fs.writeFileSync(UNMUTE_LOG_FILE, JSON.stringify(logs, null, 2));
+    } catch (error) {
+        console.error('Error logging unmute:', error);
+    }
+}
+
+// ============================================================
+// SEND MESSAGE FUNCTION
+// ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
@@ -91,7 +162,7 @@ export default {
     name: 'unmute',
     description: 'Unmute a previously muted user',
     icon: '🔊',
-    alias: ['unsilence', 'unshutup', 'umute'],
+    alias: ['unsilence', 'unshutup', 'umute', 'unmuted'],
     category: 'group',
     groupOnly: true,
     
@@ -99,6 +170,7 @@ export default {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
+        // Check if it's a group
         const groupCheck = isGroup(chatId);
         if (!groupCheck.isGroup) {
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 UNMUTE* 」❍
@@ -107,6 +179,7 @@ export default {
             return;
         }
         
+        // Check authorization
         const ownerCheck = await isOwner(senderId, jidManager);
         const adminCheck = await isAdmin(sock, chatId, senderId);
         const isAuthorized = ownerCheck.isOwner || adminCheck.isSenderAdmin;
@@ -119,10 +192,39 @@ export default {
             return;
         }
         
-        // Get target using reply, tag, or number
-        let targetId = getTargetId(msg, args);
+        const subCommand = args[0]?.toLowerCase();
         
-        if (!targetId) {
+        // ========== LIST MUTED USERS ==========
+        if (subCommand === 'list' || subCommand === 'muted' || subCommand === 'all') {
+            const mutedUsers = await getAllMutedUsers(chatId);
+            
+            if (mutedUsers.length === 0) {
+                await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 MUTED USERS* 」❍
+├ 📝 No muted users in this group
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+                return;
+            }
+            
+            let mutedList = '';
+            for (let i = 0; i < mutedUsers.length; i++) {
+                const user = mutedUsers[i];
+                const userNum = user.userId.split('@')[0];
+                mutedList += `├ ${i + 1}. @${userNum} - ${user.duration}\n`;
+                mutedList += `│    └─ ${user.reason.substring(0, 50)}\n`;
+            }
+            
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 MUTED USERS* 」❍
+${mutedList}╰──────❍
+
+_📌 Use ${currentPrefix}unmute @user to unmute_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, mutedUsers.map(u => u.userId), msg);
+            return;
+        }
+        
+        // ========== HELP COMMAND ==========
+        if (subCommand === 'help') {
             const helpMsg = `╭──❍「 *🔊 UNMUTE COMMAND* 」❍
 ├ 📝 *Ways to unmute* :
 │
@@ -135,6 +237,73 @@ export default {
 │ 3️⃣ *Type number*
 │    ${currentPrefix}unmute 255712345678
 │
+├─┬────❍
+╭─┴─❍「 *📋 OTHER COMMANDS* 」❍
+│ 🔧 ${currentPrefix}unmute list - Show muted users
+│ 🔧 ${currentPrefix}unmute all - Unmute all users
+│ 🔧 ${currentPrefix}unmute help - Show this help
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, helpMsg, [], msg);
+            return;
+        }
+        
+        // ========== UNMUTE ALL USERS ==========
+        if (subCommand === 'all') {
+            const mutedUsers = await getAllMutedUsers(chatId);
+            
+            if (mutedUsers.length === 0) {
+                await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 UNMUTE ALL* 」❍
+├ 📝 No muted users to unmute
+╰──────❍`, [], msg);
+                return;
+            }
+            
+            let unmutedCount = 0;
+            for (const user of mutedUsers) {
+                await removeMutedUser(chatId, user.userId);
+                unmutedCount++;
+                
+                // Notify each user
+                try {
+                    const notifyMsg = `╭──❍「 *🔊 MUTE LIFTED* 」❍
+├ ✅ *You have been unmuted*
+├ 📝 *Original Reason* : ${user.reason || 'No reason recorded'}
+├ 👑 *Unmuted By* : Admin (Bulk unmute)
+╰──────❍
+
+_📌 You can now send messages in the group again_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                    await sock.sendMessage(user.userId, { text: notifyMsg });
+                } catch (e) {}
+            }
+            
+            const now = moment().tz('Africa/Dar_es_Salaam');
+            await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 BULK UNMUTE* 」❍
+├ ✅ ${unmutedCount} user(s) unmuted
+├ 👑 *Unmuted By* : @${senderId.split('@')[0]}
+├ 📅 *Date* : ${now.format('DD/MM/YYYY')}
+├ ⏰ *Time* : ${now.format('HH:mm:ss')} EAT
+╰──────❍
+
+_📌 All users can now send messages again_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [senderId], msg);
+            return;
+        }
+        
+        // ========== NORMAL UNMUTE ==========
+        let targetId = getTargetId(msg, args);
+        
+        if (!targetId) {
+            const helpMsg = `╭──❍「 *🔊 UNMUTE COMMAND* 」❍
+├ 📝 *Usage* : ${currentPrefix}unmute @user
+├ 📝 *Or reply to their message* : ${currentPrefix}unmute
+│
+├─┬────❍
+╭─┴─❍「 *📋 OTHER COMMANDS* 」❍
+│ 🔧 ${currentPrefix}unmute list - Show muted users
+│ 🔧 ${currentPrefix}unmute all - Unmute all users
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
@@ -165,26 +334,57 @@ export default {
             return;
         }
         
-        // Send unmute confirmation
+        // Log the unmute action
+        await logUnmute(chatId, targetId, muteInfo.mutedBy, senderId, muteInfo.reason, muteInfo.duration);
+        
+        // Format duration for display
+        let durationDisplay = muteInfo.duration || 'Unknown';
+        if (muteInfo.expiresAt && !muteInfo.duration) {
+            const expiresAt = new Date(muteInfo.expiresAt);
+            const now = new Date();
+            const diffMs = expiresAt - now;
+            const diffMins = Math.ceil(diffMs / 60000);
+            if (diffMins > 0) {
+                durationDisplay = `${diffMins} minutes remaining`;
+            } else {
+                durationDisplay = 'Expired';
+            }
+        }
+        
+        // Send unmute confirmation to group
         await sendStyledMessage(sock, chatId, `╭──❍「 *🔊 USER UNMUTED* 」❍
 ├ 👤 *User* : @${targetId.split('@')[0]}
-├ 📝 *Reason* : ${muteInfo.reason || 'No reason recorded'}
-├ ⏱️ *Original Duration* : ${muteInfo.duration || 'Unknown'}
+├ 📝 *Original Reason* : ${muteInfo.reason || 'No reason recorded'}
+├ ⏱️ *Duration* : ${durationDisplay}
+├ 👑 *Muted By* : @${muteInfo.mutedBy?.split('@')[0] || 'Unknown'}
 ├ 👑 *Unmuted By* : @${senderId.split('@')[0]}
 ├ 📅 *Date* : ${now.format('DD/MM/YYYY')}
 ├ ⏰ *Time* : ${now.format('HH:mm:ss')} EAT
 ╰──────❍
 
 _📌 User can now send messages again_
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [targetId, senderId], msg);
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [targetId, senderId, muteInfo.mutedBy], msg);
         
-        // Notify the unmuted user
+        // Notify the unmuted user privately
         try {
+            let durationText = muteInfo.duration || 'Unknown';
+            if (muteInfo.expiresAt && !muteInfo.duration) {
+                const expiresAt = new Date(muteInfo.expiresAt);
+                const now = new Date();
+                const diffMs = expiresAt - now;
+                const diffMins = Math.ceil(diffMs / 60000);
+                if (diffMins > 0) {
+                    durationText = `${diffMins} minutes (early unmute)`;
+                }
+            }
+            
             const notifyMsg = `╭──❍「 *🔊 MUTE LIFTED* 」❍
 ├ ✅ *You have been unmuted*
 ├ 📝 *Original Reason* : ${muteInfo.reason || 'No reason recorded'}
-├ ⏱️ *Original Duration* : ${muteInfo.duration || 'Unknown'}
+├ ⏱️ *Original Duration* : ${durationText}
 ├ 👑 *Unmuted By* : Admin
+├ 📅 *Date* : ${now.format('DD/MM/YYYY')}
+├ ⏰ *Time* : ${now.format('HH:mm:ss')} EAT
 ╰──────❍
 
 _📌 You can now send messages in the group again_
@@ -196,4 +396,8 @@ _📌 You can now send messages in the group again_
     }
 };
 
-export { removeMutedUser };
+// ============================================================
+// EXPORTS
+// ============================================================
+
+export { removeMutedUser, getMuteInfo, getAllMutedUsers };
