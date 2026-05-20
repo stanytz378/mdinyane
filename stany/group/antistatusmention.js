@@ -26,6 +26,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTI_STATUS_FILE = path.join(DATA_DIR, 'antistatus_settings.json');
 const WARNS_FILE = path.join(DATA_DIR, 'antistatus_warns.json');
+const SILENT_MODE_FILE = path.join(DATA_DIR, 'antistatus_silent.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -65,6 +66,36 @@ const adminInsults = [
 
 const getRandomInsult = () => adminInsults[Math.floor(Math.random() * adminInsults.length)];
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
+
+// ============================================================
+// SILENT MODE FUNCTIONS
+// ============================================================
+
+async function getSilentMode(groupId) {
+    try {
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+            return data[groupId] || false;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function setSilentMode(groupId, enabled) {
+    try {
+        let data = {};
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+        }
+        data[groupId] = enabled;
+        fs.writeFileSync(SILENT_MODE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 // ============================================================
 // DATABASE FUNCTIONS
@@ -141,28 +172,16 @@ async function resetWarns(chatId, userId) {
 }
 
 // ============================================================
-// SEND WITH IMAGE AND FORWARDED MARK
+// SEND MESSAGE (TEXT ONLY - NO IMAGE)
 // ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
-        const imageFullPath = path.join(process.cwd(), botImagePath);
-        const imageExists = fs.existsSync(imageFullPath);
-        
-        if (imageExists) {
-            await sock.sendMessage(chatId, {
-                image: fs.readFileSync(imageFullPath),
-                caption: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        } else {
-            await sock.sendMessage(chatId, {
-                text: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        }
+        await sock.sendMessage(chatId, {
+            text: text,
+            contextInfo: channelInfo.contextInfo,
+            mentions: mentions
+        }, { quoted: quoted });
     } catch (error) {
         await sock.sendMessage(chatId, {
             text: text,
@@ -196,11 +215,13 @@ export async function handleStatusMention(sock, message, chatId, isGroupChat, se
         const isBotAdmin = adminCheck.isBotAdmin;
         
         const randomQuote = getRandomQuote();
+        const isSilent = await getSilentMode(chatId);
         
-        // ADMIN gets insult
+        // ADMIN gets insult (even in silent mode, insult is funny)
         if (isSenderAdmin) {
-            const insult = getRandomInsult();
-            const adminMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+            if (!isSilent) {
+                const insult = getRandomInsult();
+                const adminMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👑 *Admin* : @${senderId.split('@')[0]}
 ├ 💬 *Warning* : ${insult}
 ╰──────❍
@@ -209,7 +230,8 @@ export async function handleStatusMention(sock, message, chatId, isGroupChat, se
 
 _📌 Status mentions are not allowed even for Admins!_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, adminMsg, [senderId], message);
+                await sendStyledMessage(sock, chatId, adminMsg, [senderId], message);
+            }
             return;
         }
         
@@ -223,7 +245,8 @@ _📌 Status mentions are not allowed even for Admins!_
         // ========== KICK ACTION ==========
         if (action === 'kick') {
             if (!isBotAdmin) {
-                const kickErrorMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+                if (!isSilent) {
+                    const kickErrorMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ ⚠️ *Status* : Status mention detected
 ├ ❌ *Error* : Make me admin to kick!
@@ -233,12 +256,14 @@ _📌 Status mentions are not allowed even for Admins!_
 
 _📌 Please promote bot to admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickErrorMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickErrorMsg, [senderId], message);
+                }
                 return;
             }
             try {
                 await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
-                const kickMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+                if (!isSilent) {
+                    const kickMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🚫 *Action* : KICKED
 ├ 📝 *Reason* : Status mention spam
@@ -248,9 +273,11 @@ _📌 Please promote bot to admin for full protection_
 
 _📌 Status mentions are not allowed in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                }
             } catch (error) {
-                const kickFailMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+                if (!isSilent) {
+                    const kickFailMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ ❌ *Error* : Failed to kick user
 ├ 📝 *Reason* : ${error.message}
@@ -260,7 +287,8 @@ _📌 Status mentions are not allowed in this group_
 
 _📌 Check my permissions and try again_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                    await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                }
             }
             return;
         }
@@ -275,7 +303,8 @@ _📌 Check my permissions and try again_
                 await resetWarns(chatId, senderId);
                 if (isBotAdmin) {
                     await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
-                    const kickAfterWarnMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+                    if (!isSilent) {
+                        const kickAfterWarnMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ ⚠️ *Warns* : ${warnCount}/${maxWarns}
 ├ 🚫 *Action* : KICKED (max warns reached)
@@ -285,9 +314,11 @@ _📌 Check my permissions and try again_
 
 _📌 User has been kicked after ${maxWarns} warnings_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                    }
                 } else {
-                    const noKickMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+                    if (!isSilent) {
+                        const noKickMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ ⚠️ *Warns* : ${warnCount}/${maxWarns}
 ├ ❌ *Note* : Make me admin to kick!
@@ -297,12 +328,14 @@ _📌 User has been kicked after ${maxWarns} warnings_
 
 _📌 User has reached warning limit but bot is not admin_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                    }
                 }
                 return;
             }
             
-            const warnMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+            if (!isSilent) {
+                const warnMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ ⚠️ *Warning* : ${warnCount}/${maxWarns}
 ├ 📝 *Remaining* : ${remaining} warning(s) left
@@ -312,13 +345,15 @@ _📌 User has reached warning limit but bot is not admin_
 
 _📌 Next violation may result in a kick_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+                await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+            }
             return;
         }
         
         // ========== DELETE ACTION (default) ==========
         if (action === 'delete') {
-            const deleteMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+            if (!isSilent) {
+                const deleteMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🗑️ *Action* : Message deleted
 ├ 📝 *Reason* : Status mentions not allowed
@@ -328,7 +363,9 @@ _📌 Next violation may result in a kick_
 
 _📌 Please avoid using status mentions in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+                await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+            }
+            return;
         }
         
     } catch (error) {
@@ -402,9 +439,13 @@ _📌 Contact group admin for assistance_
             const settings = await getSettings(chatId);
             const statusIcon = settings.enabled ? '✅' : '❌';
             const actionText = (settings.action || 'delete').toUpperCase();
+            const isSilent = await getSilentMode(chatId);
+            const silentIcon = isSilent ? '🔇' : '🔊';
+            const silentText = isSilent ? 'SILENT (no messages)' : 'NORMAL (with warnings)';
             
             const statusMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
 ├ 📵 *Status* : ${statusIcon} ${settings.enabled ? 'ENABLED' : 'DISABLED'}
+├ ${silentIcon} *Mode* : ${silentText}
 ├ ⚡ *Action* : ${actionText}
 ├ ⚠️ *Warn Limit* : ${settings.warnLimit || 3}
 ├ 🤖 *Bot Admin* : ${isBotGroupAdmin ? '✅' : '❌'}
@@ -412,15 +453,18 @@ _📌 Contact group admin for assistance_
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}antistatus on - Enable
 │ 🔧 ${currentPrefix}antistatus off - Disable
-│ 🔧 ${currentPrefix}antistatus set delete - Delete only
-│ 🔧 ${currentPrefix}antistatus set warn - Warn then kick
-│ 🔧 ${currentPrefix}antistatus set kick - Kick immediately
+│ 🔧 ${currentPrefix}antistatus delete - Delete only
+│ 🔧 ${currentPrefix}antistatus delete silent - Delete silently
+│ 🔧 ${currentPrefix}antistatus warn - Warn then kick
+│ 🔧 ${currentPrefix}antistatus kick - Kick immediately
+│ 🔧 ${currentPrefix}antistatus silent - Toggle silent mode
 │ 🔧 ${currentPrefix}antistatus set warnlimit <num>
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 *Date* : ${date}
 ├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
+├ 👑 *Exempt* : Owner only (Admins get insulted!)
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
@@ -472,23 +516,120 @@ _📌 Status mentions will now be deleted_
             return;
         }
         
-        // ========== SET ACTION ==========
-        if (action === 'set') {
-            if (args.length < 2) {
-                const usageMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
-├ ❌ *Usage* : ${currentPrefix}antistatus set delete|warn|kick|warnlimit <num>
-├ 📝 *Example* : ${currentPrefix}antistatus set warn
+        // ========== DELETE ACTION WITH SILENT MODE ==========
+        if (action === 'delete') {
+            await setSettings(chatId, 'delete', 3);
+            
+            const silentMode = args[1]?.toLowerCase() === 'silent';
+            await setSilentMode(chatId, silentMode);
+            
+            const actionSetMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ✅ *Action* : Set to DELETE
+├ 🔇 *Mode* : ${silentMode ? 'SILENT (no messages)' : 'NORMAL (with warnings)'}
 ╰──────❍
 
-_📌 Available actions: delete, warn, kick_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, usageMsg, [], msg);
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET WARN ACTION ==========
+        if (action === 'warn') {
+            if (!isBotGroupAdmin) {
+                const noAdminMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ⚠️ *Warning* : WARN action requires bot admin
+├ ❌ *Note* : Bot needs admin rights for this action
+╰──────❍
+
+_📌 Please make bot admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
+            }
+            const current = await getSettings(chatId);
+            await setSettings(chatId, 'warn', current.warnLimit || 3);
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ✅ *Action* : Set to WARN
+├ 📝 *Description* : Warn users (${current.warnLimit || 3} warnings then kick)
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET KICK ACTION ==========
+        if (action === 'kick') {
+            if (!isBotGroupAdmin) {
+                const noAdminMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ⚠️ *Warning* : KICK action requires bot admin
+├ ❌ *Note* : Bot needs admin rights for this action
+╰──────❍
+
+_📌 Please make bot admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
+            }
+            const current = await getSettings(chatId);
+            await setSettings(chatId, 'kick', current.warnLimit || 3);
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ✅ *Action* : Set to KICK
+├ 📝 *Description* : Kick users immediately
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (action === 'silent') {
+            const currentSettings = await getSettings(chatId);
+            if (!currentSettings.enabled) {
+                const notEnabledMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ❌ *Error* : Anti-status is not enabled!
+├ 📝 *First enable with* : ${currentPrefix}antistatus on
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, notEnabledMsg, [], msg);
                 return;
             }
             
-            const setAction = args[1].toLowerCase();
+            if (currentSettings.action !== 'delete') {
+                const wrongActionMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ❌ *Error* : Silent mode only works with DELETE action!
+├ 📝 *Current action* : ${currentSettings.action.toUpperCase()}
+├ 🔧 *Use* : ${currentPrefix}antistatus delete
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, wrongActionMsg, [], msg);
+                return;
+            }
             
-            if (setAction === 'warnlimit') {
+            const currentSilent = await getSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setSilentMode(chatId, newSilent);
+            
+            const silentMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ 🔇 *Silent Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Status mentions deleted silently - No messages sent' : 'Status mentions deleted with warning messages'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, silentMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET WARN LIMIT ==========
+        if (action === 'set') {
+            if (args[1]?.toLowerCase() === 'warnlimit') {
                 const limit = parseInt(args[2]);
                 if (isNaN(limit) || limit < 1 || limit > 10) {
                     const limitErrorMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
@@ -510,33 +651,13 @@ _📌 Available actions: delete, warn, kick_
                 return;
             }
             
-            if (!['delete', 'warn', 'kick'].includes(setAction)) {
-                const invalidMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
-├ ❌ *Invalid action* : ${setAction}
-├ 📝 *Available* : delete, warn, kick
+            const invalidSetMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
+├ ❌ *Usage* : ${currentPrefix}antistatus set warnlimit <num>
+├ 📝 *Example* : ${currentPrefix}antistatus set warnlimit 5
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, invalidMsg, [], msg);
-                return;
-            }
-            
-            const current = await getSettings(chatId);
-            await setSettings(chatId, setAction, current.warnLimit || 3);
-            
-            const actionDesc = {
-                delete: 'Delete only (no warnings)',
-                warn: 'Warn then kick after limit',
-                kick: 'Kick immediately'
-            };
-            
-            const actionSetMsg = `╭──❍「 *🛡️ ANTI STATUS MENTION* 」❍
-├ ✅ *Action* : Set to ${setAction.toUpperCase()}
-├ 📝 *Description* : ${actionDesc[setAction]}
-╰──────❍
-
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            await sendStyledMessage(sock, chatId, invalidSetMsg, [], msg);
             return;
         }
         
@@ -550,3 +671,8 @@ _📌 Available actions: delete, warn, kick_
         await sendStyledMessage(sock, chatId, invalidCmdMsg, [], msg);
     }
 };
+
+// ============================================================
+// EXPORTS
+// ============================================================
+export { getSettings, setSettings, disableSettings, getWarns, addWarn, resetWarns, getSilentMode, setSilentMode };
