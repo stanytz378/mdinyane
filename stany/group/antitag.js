@@ -26,6 +26,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTITAG_FILE = path.join(DATA_DIR, 'antitag_settings.json');
 const WARNINGS_FILE = path.join(DATA_DIR, 'antitag_warnings.json');
+const SILENT_MODE_FILE = path.join(DATA_DIR, 'antitag_silent.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -46,6 +47,36 @@ const QUOTES = [
 ];
 
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
+
+// ============================================================
+// SILENT MODE FUNCTIONS
+// ============================================================
+
+async function getSilentMode(groupId) {
+    try {
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+            return data[groupId] || false;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function setSilentMode(groupId, enabled) {
+    try {
+        let data = {};
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+        }
+        data[groupId] = enabled;
+        fs.writeFileSync(SILENT_MODE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 // ============================================================
 // DATABASE FUNCTIONS
@@ -71,11 +102,12 @@ async function saveDatabase(filePath, data) {
     }
 }
 
-async function setAntitag(chatId, action) {
+async function setAntitag(chatId, action, warnLimit = 3) {
     const settings = await loadDatabase(ANTITAG_FILE, {});
     settings[chatId] = {
         enabled: true,
         action: action,
+        warnLimit: warnLimit,
         updatedAt: new Date().toISOString()
     };
     await saveDatabase(ANTITAG_FILE, settings);
@@ -84,7 +116,7 @@ async function setAntitag(chatId, action) {
 
 async function getAntitag(chatId) {
     const settings = await loadDatabase(ANTITAG_FILE, {});
-    return settings[chatId] || { enabled: false, action: null };
+    return settings[chatId] || { enabled: false, action: 'delete', warnLimit: 3 };
 }
 
 async function removeAntitag(chatId) {
@@ -116,28 +148,16 @@ async function resetWarnings(chatId, userId) {
 }
 
 // ============================================================
-// SEND WITH IMAGE AND FORWARDED MARK
+// SEND MESSAGE (TEXT ONLY - NO IMAGE)
 // ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
-        const imageFullPath = path.join(process.cwd(), botImagePath);
-        const imageExists = fs.existsSync(imageFullPath);
-        
-        if (imageExists) {
-            await sock.sendMessage(chatId, {
-                image: fs.readFileSync(imageFullPath),
-                caption: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        } else {
-            await sock.sendMessage(chatId, {
-                text: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        }
+        await sock.sendMessage(chatId, {
+            text: text,
+            contextInfo: channelInfo.contextInfo,
+            mentions: mentions
+        }, { quoted: quoted });
     } catch (error) {
         await sock.sendMessage(chatId, {
             text: text,
@@ -159,6 +179,14 @@ export async function handleTagDetection(sock, chatId, message, senderId) {
         // Get antitag settings
         const antitagSetting = await getAntitag(chatId);
         if (!antitagSetting || !antitagSetting.enabled) return;
+        
+        // Check if sender is owner (exempt)
+        const ownerCheck = await isOwner(senderId);
+        if (ownerCheck.isOwner) return;
+        
+        // Check if sender is admin (exempt)
+        const adminCheck = await isAdmin(sock, chatId, senderId);
+        if (adminCheck.isSenderAdmin) return;
         
         // Get mentioned JIDs
         const mentionedJids = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
@@ -192,19 +220,21 @@ export async function handleTagDetection(sock, chatId, message, senderId) {
             
             if (totalMentions >= mentionThreshold || hasManyNumericMentions) {
                 const action = antitagSetting.action || 'delete';
+                const warnLimit = antitagSetting.warnLimit || 3;
                 const randomQuote = getRandomQuote();
+                const isSilent = await getSilentMode(chatId);
+                const isBotAdmin = adminCheck.isBotAdmin;
                 
                 // Delete the message
                 try {
                     await sock.sendMessage(chatId, { delete: message.key });
                 } catch {}
                 
-                // KICK ACTION
+                // ========== KICK ACTION ==========
                 if (action === 'kick') {
-                    // Check if bot is admin
-                    const adminCheck = await isAdmin(sock, chatId, sock.user.id);
-                    if (!adminCheck.isBotAdmin) {
-                        const noAdminMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+                    if (!isBotAdmin) {
+                        if (!isSilent) {
+                            const noAdminMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🏷️ *Action* : Mass tag detected
 ├ ❌ *Error* : Make me admin to kick!
@@ -214,13 +244,15 @@ export async function handleTagDetection(sock, chatId, message, senderId) {
 
 _📌 Please promote bot to admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                        await sendStyledMessage(sock, chatId, noAdminMsg, [senderId], message);
+                            await sendStyledMessage(sock, chatId, noAdminMsg, [senderId], message);
+                        }
                         return;
                     }
                     
                     try {
                         await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
-                        const kickMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+                        if (!isSilent) {
+                            const kickMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🏷️ *Action* : Mass tag detected
 ├ 🚫 *Result* : KICKED
@@ -230,9 +262,11 @@ _📌 Please promote bot to admin for full protection_
 
 _📌 Mass tagging members is not allowed in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                        await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                            await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                        }
                     } catch (error) {
-                        const kickFailMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+                        if (!isSilent) {
+                            const kickFailMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🏷️ *Action* : Mass tag detected
 ├ ❌ *Error* : Failed to kick user
@@ -242,14 +276,75 @@ _📌 Mass tagging members is not allowed in this group_
 
 _📌 Check my permissions and try again_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                        await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                            await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                        }
                     }
                     return;
                 }
                 
-                // DELETE ACTION (default)
+                // ========== WARN ACTION ==========
+                if (action === 'warn') {
+                    const warnCount = await addWarning(chatId, senderId);
+                    const remaining = warnLimit - warnCount;
+                    
+                    if (warnCount >= warnLimit) {
+                        await resetWarnings(chatId, senderId);
+                        if (isBotAdmin) {
+                            await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
+                            if (!isSilent) {
+                                const kickAfterWarnMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 🏷️ *Action* : Mass tag detected
+├ ⚠️ *Warns* : ${warnCount}/${warnLimit}
+├ 🚫 *Result* : KICKED (max warns)
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 User has been kicked after ${warnLimit} warnings_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                                await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                            }
+                        } else {
+                            if (!isSilent) {
+                                const noKickMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 🏷️ *Action* : Mass tag detected
+├ ⚠️ *Warns* : ${warnCount}/${warnLimit}
+├ ❌ *Note* : Make me admin to kick!
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 User has reached warning limit_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                                await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                            }
+                        }
+                        return;
+                    }
+                    
+                    if (!isSilent) {
+                        const warnMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 🏷️ *Action* : Mass tag detected
+├ ⚠️ *Warning* : ${warnCount}/${warnLimit}
+├ 📝 *Remaining* : ${remaining} warning(s) left
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Next violation may result in a kick_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                        await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+                    }
+                    return;
+                }
+                
+                // ========== DELETE ACTION (default) ==========
                 if (action === 'delete') {
-                    const deleteMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+                    if (!isSilent) {
+                        const deleteMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ 👤 *User* : @${senderId.split('@')[0]}
 ├ 🏷️ *Action* : Mass tag detected
 ├ 🗑️ *Result* : Message deleted
@@ -259,7 +354,9 @@ _📌 Check my permissions and try again_
 
 _📌 Mass tagging members is not allowed in this group_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                    await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+                        await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+                    }
+                    return;
                 }
             }
         }
@@ -323,6 +420,7 @@ _📌 Contact group admin for assistance_
         const config = await getAntitag(chatId);
         const randomQuote = getRandomQuote();
         const botName = 'MDINYANE';
+        const isBotAdmin = adminCheck.isBotAdmin;
         
         const action = args[0]?.toLowerCase();
         
@@ -330,16 +428,26 @@ _📌 Contact group admin for assistance_
         if (!action) {
             const statusIcon = config.enabled ? '✅' : '❌';
             const actionText = (config.action || 'delete').toUpperCase();
+            const isSilent = await getSilentMode(chatId);
+            const silentIcon = isSilent ? '🔇' : '🔊';
+            const silentText = isSilent ? 'SILENT (no messages)' : 'NORMAL (with warnings)';
             
             const statusMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ 📵 *Status* : ${statusIcon} ${config.enabled ? 'ENABLED' : 'DISABLED'}
+├ ${silentIcon} *Mode* : ${silentText}
 ├ ⚡ *Action* : ${actionText}
+├ ⚠️ *Warn Limit* : ${config.warnLimit || 3}
+├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}antitag on - Enable protection
 │ 🔧 ${currentPrefix}antitag off - Disable protection
-│ 🔧 ${currentPrefix}antitag delete - Delete mass tags
-│ 🔧 ${currentPrefix}antitag kick - Kick on mass tag
+│ 🔧 ${currentPrefix}antitag delete - Delete only
+│ 🔧 ${currentPrefix}antitag delete silent - Delete silently
+│ 🔧 ${currentPrefix}antitag warn - Warn then kick
+│ 🔧 ${currentPrefix}antitag kick - Kick immediately
+│ 🔧 ${currentPrefix}antitag silent - Toggle silent mode
+│ 🔧 ${currentPrefix}antitag set warnlimit <num>
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
 ├ 📅 *Date* : ${date}
@@ -369,7 +477,7 @@ _📌 Admins and Owner are EXEMPT from antitag_
                 await sendStyledMessage(sock, chatId, alreadyMsg, [], msg);
                 return;
             }
-            await setAntitag(chatId, 'delete');
+            await setAntitag(chatId, 'delete', 3);
             const successMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ ✅ *Status* : ENABLED
 ├ ⚡ *Action* : DELETE
@@ -397,28 +505,144 @@ _📌 Mass tagging will now be detected and deleted_
             return;
         }
         
-        // ========== SET ACTION ==========
+        // ========== DELETE ACTION WITH SILENT MODE ==========
         if (action === 'delete') {
-            await setAntitag(chatId, 'delete');
-            const deleteSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+            await setAntitag(chatId, 'delete', config.warnLimit || 3);
+            
+            const silentMode = args[1]?.toLowerCase() === 'silent';
+            await setSilentMode(chatId, silentMode);
+            
+            const actionSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
 ├ ✅ *Action* : Set to DELETE
-├ 📝 *Description* : Delete mass tag messages
+├ 🔇 *Mode* : ${silentMode ? 'SILENT (no messages)' : 'NORMAL (with warnings)'}
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, deleteSetMsg, [], msg);
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
             return;
         }
         
-        if (action === 'kick') {
-            await setAntitag(chatId, 'kick');
-            const kickSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
-├ ✅ *Action* : Set to KICK
-├ 📝 *Description* : Kick users who mass tag
+        // ========== SET WARN ACTION ==========
+        if (action === 'warn') {
+            if (!isBotAdmin) {
+                const noAdminMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ⚠️ *Warning* : WARN action requires bot admin
+├ ❌ *Note* : Bot needs admin rights for this action
+╰──────❍
+
+_📌 Please make bot admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
+            }
+            await setAntitag(chatId, 'warn', config.warnLimit || 3);
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ✅ *Action* : Set to WARN
+├ 📝 *Description* : Warn users (${config.warnLimit || 3} warnings then kick)
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            await sendStyledMessage(sock, chatId, kickSetMsg, [], msg);
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET KICK ACTION ==========
+        if (action === 'kick') {
+            if (!isBotAdmin) {
+                const noAdminMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ⚠️ *Warning* : KICK action requires bot admin
+├ ❌ *Note* : Bot needs admin rights for this action
+╰──────❍
+
+_📌 Please make bot admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
+            }
+            await setAntitag(chatId, 'kick', config.warnLimit || 3);
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ✅ *Action* : Set to KICK
+├ 📝 *Description* : Kick users immediately
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (action === 'silent') {
+            if (!config.enabled) {
+                const notEnabledMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ❌ *Error* : Anti-tag is not enabled!
+├ 📝 *First enable with* : ${currentPrefix}antitag on
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, notEnabledMsg, [], msg);
+                return;
+            }
+            
+            if (config.action !== 'delete') {
+                const wrongActionMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ❌ *Error* : Silent mode only works with DELETE action!
+├ 📝 *Current action* : ${config.action.toUpperCase()}
+├ 🔧 *Use* : ${currentPrefix}antitag delete
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, wrongActionMsg, [], msg);
+                return;
+            }
+            
+            const currentSilent = await getSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setSilentMode(chatId, newSilent);
+            
+            const silentMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ 🔇 *Silent Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Mass tags deleted silently - No messages sent' : 'Mass tags deleted with warning messages'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, silentMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET WARN LIMIT ==========
+        if (action === 'set') {
+            if (args[1]?.toLowerCase() === 'warnlimit') {
+                const limit = parseInt(args[2]);
+                if (isNaN(limit) || limit < 1 || limit > 10) {
+                    const limitErrorMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ❌ *Error* : Warn limit must be between 1 and 10!
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                    await sendStyledMessage(sock, chatId, limitErrorMsg, [], msg);
+                    return;
+                }
+                await setAntitag(chatId, config.action || 'delete', limit);
+                const limitSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ✅ *Warn Limit* : Set to ${limit}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, limitSetMsg, [], msg);
+                return;
+            }
+            
+            const invalidSetMsg = `╭──❍「 *🏷️ ANTITAG PROTECTION* 」❍
+├ ❌ *Usage* : ${currentPrefix}antitag set warnlimit <num>
+├ 📝 *Example* : ${currentPrefix}antitag set warnlimit 5
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, invalidSetMsg, [], msg);
             return;
         }
         
@@ -434,4 +658,4 @@ _📌 Mass tagging will now be detected and deleted_
 };
 
 // Export for use in index.js
-export { setAntitag, getAntitag, removeAntitag };
+export { setAntitag, getAntitag, removeAntitag, getSilentMode, setSilentMode };
