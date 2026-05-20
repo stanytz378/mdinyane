@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
-import { channelInfo, botImagePath } from '../../stanytz/messageConfig.js';
+import { channelInfo } from '../../stanytz/messageConfig.js';
 import isAdmin from '../../stanymain/isAdmin.js';
 import isOwner from '../../stanymain/isOwner.js';
 import isGroup from '../../stanymain/isGroup.js';
@@ -26,6 +26,85 @@ const __dirname = path.dirname(__filename);
 // Data directory
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTIMEDIA_FILE = path.join(DATA_DIR, 'antimedia_settings.json');
+const SILENT_MODE_FILE = path.join(DATA_DIR, 'antimedia_silent.json');
+const WARNINGS_FILE = path.join(DATA_DIR, 'antimedia_warnings.json');
+
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// ============================================================
+// WARNING FUNCTIONS
+// ============================================================
+
+async function getWarnings(groupId, userId) {
+    try {
+        if (fs.existsSync(WARNINGS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WARNINGS_FILE, 'utf8'));
+            return data[groupId]?.[userId] || 0;
+        }
+        return 0;
+    } catch {
+        return 0;
+    }
+}
+
+async function addWarning(groupId, userId) {
+    try {
+        let data = {};
+        if (fs.existsSync(WARNINGS_FILE)) {
+            data = JSON.parse(fs.readFileSync(WARNINGS_FILE, 'utf8'));
+        }
+        if (!data[groupId]) data[groupId] = {};
+        data[groupId][userId] = (data[groupId][userId] || 0) + 1;
+        fs.writeFileSync(WARNINGS_FILE, JSON.stringify(data, null, 2));
+        return data[groupId][userId];
+    } catch {
+        return 1;
+    }
+}
+
+async function resetWarnings(groupId, userId) {
+    try {
+        if (fs.existsSync(WARNINGS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WARNINGS_FILE, 'utf8'));
+            if (data[groupId]) {
+                delete data[groupId][userId];
+                fs.writeFileSync(WARNINGS_FILE, JSON.stringify(data, null, 2));
+            }
+        }
+    } catch {}
+}
+
+// ============================================================
+// SILENT MODE FUNCTIONS
+// ============================================================
+
+async function getSilentMode(groupId) {
+    try {
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+            return data[groupId] || false;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function setSilentMode(groupId, enabled) {
+    try {
+        let data = {};
+        if (fs.existsSync(SILENT_MODE_FILE)) {
+            data = JSON.parse(fs.readFileSync(SILENT_MODE_FILE, 'utf8'));
+        }
+        data[groupId] = enabled;
+        fs.writeFileSync(SILENT_MODE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 // ============================================================
 // DATABASE FUNCTIONS
@@ -95,33 +174,193 @@ const QUOTES = [
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
 // ============================================================
-// SEND WITH IMAGE AND FORWARDED MARK
+// SEND MESSAGE (TEXT ONLY - NO IMAGE)
 // ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
-        const imageFullPath = path.join(process.cwd(), botImagePath);
-        const imageExists = fs.existsSync(imageFullPath);
-        
-        if (imageExists) {
-            await sock.sendMessage(chatId, {
-                image: fs.readFileSync(imageFullPath),
-                caption: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        } else {
-            await sock.sendMessage(chatId, {
-                text: text,
-                contextInfo: channelInfo.contextInfo,
-                mentions: mentions
-            }, { quoted: quoted });
-        }
+        await sock.sendMessage(chatId, {
+            text: text,
+            contextInfo: channelInfo.contextInfo,
+            mentions: mentions
+        }, { quoted: quoted });
     } catch (error) {
         await sock.sendMessage(chatId, {
             text: text,
             mentions: mentions
         }, { quoted: quoted });
+    }
+}
+
+// ============================================================
+// MAIN HANDLER - Media Detection
+// ============================================================
+
+export async function handleMediaDetection(sock, chatId, message, senderId, mediaType) {
+    try {
+        // Check if it's a group
+        const groupCheck = isGroup(chatId);
+        if (!groupCheck.isGroup) return false;
+        
+        // Get antimedia settings
+        const config = await getAntiMedia(chatId);
+        if (!config.enabled) return false;
+        
+        // Check if media type is blocked
+        const blockedTypes = config.blockedTypes || DEFAULT_BLOCKED_TYPES;
+        if (!blockedTypes.includes(mediaType)) return false;
+        
+        // Check if sender is owner (exempt)
+        const ownerCheck = await isOwner(senderId);
+        if (ownerCheck.isOwner) return false;
+        
+        // Check if sender is admin (exempt)
+        const adminCheck = await isAdmin(sock, chatId, senderId);
+        if (adminCheck.isSenderAdmin) return false;
+        
+        const action = config.action || 'delete';
+        const randomQuote = getRandomQuote();
+        const isSilent = await getSilentMode(chatId);
+        const mediaDesc = getMediaDescription(mediaType);
+        
+        // Delete the media message
+        try {
+            await sock.sendMessage(chatId, { delete: message.key });
+        } catch {}
+        
+        // ========== KICK ACTION ==========
+        if (action === 'kick') {
+            if (!adminCheck.isBotAdmin) {
+                if (!isSilent) {
+                    const kickErrorMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ ❌ *Error* : Make me admin to kick!
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Please promote bot to admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                    await sendStyledMessage(sock, chatId, kickErrorMsg, [senderId], message);
+                }
+                return false;
+            }
+            try {
+                await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
+                if (!isSilent) {
+                    const kickMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ 🚫 *Action* : KICKED
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Media sharing is not allowed in this group_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                    await sendStyledMessage(sock, chatId, kickMsg, [senderId], message);
+                }
+                return true;
+            } catch (error) {
+                if (!isSilent) {
+                    const kickFailMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ ❌ *Error* : Failed to kick user
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Check my permissions and try again_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                    await sendStyledMessage(sock, chatId, kickFailMsg, [senderId], message);
+                }
+                return false;
+            }
+        }
+        
+        // ========== WARN ACTION ==========
+        if (action === 'warn') {
+            const warnCount = await addWarning(chatId, senderId);
+            const remaining = 3 - warnCount;
+            
+            if (warnCount >= 3) {
+                await resetWarnings(chatId, senderId);
+                if (adminCheck.isBotAdmin) {
+                    await sock.groupParticipantsUpdate(chatId, [senderId], "remove");
+                    if (!isSilent) {
+                        const kickAfterWarnMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ ⚠️ *Warns* : ${warnCount}/3
+├ 🚫 *Action* : KICKED (max warns)
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 User has been kicked after 3 warnings_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                        await sendStyledMessage(sock, chatId, kickAfterWarnMsg, [senderId], message);
+                    }
+                } else {
+                    if (!isSilent) {
+                        const noKickMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ ⚠️ *Warns* : ${warnCount}/3
+├ ❌ *Note* : Make me admin to kick!
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 User has reached warning limit_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                        await sendStyledMessage(sock, chatId, noKickMsg, [senderId], message);
+                    }
+                }
+                return true;
+            }
+            
+            if (!isSilent) {
+                const warnMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ ⚠️ *Warning* : ${warnCount}/3
+├ 📝 *Remaining* : ${remaining} warning(s) left
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Next violation may result in a kick_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, warnMsg, [senderId], message);
+            }
+            return true;
+        }
+        
+        // ========== DELETE ACTION (default with silent support) ==========
+        if (action === 'delete') {
+            if (!isSilent) {
+                const deleteMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
+├ 👤 *User* : @${senderId.split('@')[0]}
+├ 📎 *Media Type* : ${mediaDesc}
+├ 🗑️ *Action* : Message deleted
+╰──────❍
+
+✨ *"${randomQuote}"* ✨
+
+_📌 Media sharing is not allowed in this group_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, deleteMsg, [senderId], message);
+            }
+            return true;
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Media detection error:', error);
+        return false;
     }
 }
 
@@ -193,6 +432,10 @@ _📌 Contact group admin for assistance_
             const statusText = config.enabled ? 'ENABLED' : 'DISABLED';
             const actionText = config.action.toUpperCase();
             const blockedTypes = config.blockedTypes || [];
+            const isSilent = await getSilentMode(chatId);
+            const silentIcon = isSilent ? '🔇' : '🔊';
+            const silentText = isSilent ? 'SILENT (no messages)' : 'NORMAL (with warnings)';
+            
             const blockedList = blockedTypes.length 
                 ? blockedTypes.map(t => `│  • ${getMediaDescription(t)}`).join('\n')
                 : '│  • None';
@@ -200,6 +443,7 @@ _📌 Contact group admin for assistance_
             const statusMsg = `╭──❍「 *🖼️ ANTI-MEDIA PROTECTION* 」❍
 ├ 📵 *Status* : ${statusIcon} ${statusText}
 ├ 🎯 *Action* : ${actionText}
+├ ${silentIcon} *Mode* : ${silentText}
 ├ 🤖 *Bot Admin* : ${isBotAdmin ? '✅' : '❌'}
 ╰─┬────❍
 ╭─┴─❍「 *🚫 BLOCKED MEDIA TYPES* 」❍
@@ -208,9 +452,11 @@ ${blockedList}
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}antimedia on - Enable protection
 │ 🔧 ${currentPrefix}antimedia off - Disable protection
-│ 🔧 ${currentPrefix}antimedia set delete - Delete only
-│ 🔧 ${currentPrefix}antimedia set warn - Delete + Warn
-│ 🔧 ${currentPrefix}antimedia set kick - Delete + Kick
+│ 🔧 ${currentPrefix}antimedia delete - Delete only
+│ 🔧 ${currentPrefix}antimedia delete silent - Delete silently
+│ 🔧 ${currentPrefix}antimedia warn - Warn then kick
+│ 🔧 ${currentPrefix}antimedia kick - Kick immediately
+│ 🔧 ${currentPrefix}antimedia silent - Toggle silent mode
 │ 🔧 ${currentPrefix}antimedia types <types> - Set blocked types
 ╰──────❍
 ╭─┴─❍「 *📊 INFO* 」❍
@@ -218,7 +464,7 @@ ${blockedList}
 ├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
 ├ 👑 *Exempt* : Admins & Owner
-├ 📝 *Available Types* : ${VALID_MEDIA_TYPES.join(', ')}
+├ 📝 *Available Types* : ${VALID_MEDIA_TYPES.map(t => getMediaDescription(t)).join(', ')}
 ╰──────❍
 
 ✨ *"${randomQuote}"* ✨
@@ -282,49 +528,111 @@ _📌 Media messages will now be deleted automatically_
             return;
         }
         
-        // ========== SET ACTION ==========
-        if (action === 'set') {
-            const newAction = args[1]?.toLowerCase();
+        // ========== DELETE ACTION WITH SILENT MODE ==========
+        if (action === 'delete') {
+            await setAntiMedia(chatId, config.enabled || true, 'delete', config.blockedTypes);
             
-            if (!newAction || !['delete', 'warn', 'kick'].includes(newAction)) {
-                const usageMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
-├ ❌ *Usage* : ${currentPrefix}antimedia set delete|warn|kick
-├ 📝 *Example* : ${currentPrefix}antimedia set warn
+            const silentMode = args[1]?.toLowerCase() === 'silent';
+            await setSilentMode(chatId, silentMode);
+            
+            const actionSetMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ✅ *Action* : Set to DELETE
+├ 🔇 *Mode* : ${silentMode ? 'SILENT (no messages)' : 'NORMAL (with warnings)'}
 ╰──────❍
 
-_📌 Available actions: delete, warn, kick_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, usageMsg, [], msg);
-                return;
-            }
-            
-            if (newAction !== 'delete' && newAction !== 'warn' && !isBotAdmin) {
-                const warnNoAdminMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
-├ ⚠️ *Warning* : Action set to ${newAction.toUpperCase()}
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET WARN ==========
+        if (action === 'warn') {
+            if (!isBotAdmin) {
+                const noAdminMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ⚠️ *Warning* : WARN action requires bot admin
 ├ ❌ *Note* : Bot needs admin rights for this action
 ╰──────❍
 
 _📌 Please make bot admin for full protection_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-                await sendStyledMessage(sock, chatId, warnNoAdminMsg, [], msg);
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
             }
-            
-            await setAntiMedia(chatId, config.enabled, newAction, config.blockedTypes);
-            
-            const actionDesc = {
-                delete: 'Delete media messages only',
-                warn: 'Delete + Send warning',
-                kick: 'Delete + Warning + Kick user'
-            };
+            await setAntiMedia(chatId, config.enabled, 'warn', config.blockedTypes);
+            await setSilentMode(chatId, false);
             
             const actionSetMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
-├ ✅ *Action Updated*
-├ 🎯 *Action* : ${newAction.toUpperCase()}
-├ 📝 *Description* : ${actionDesc[newAction]}
+├ ✅ *Action* : Set to WARN
+├ 📝 *Description* : Warn users (3 warnings then kick)
 ╰──────❍
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== SET KICK ==========
+        if (action === 'kick') {
+            if (!isBotAdmin) {
+                const noAdminMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ⚠️ *Warning* : KICK action requires bot admin
+├ ❌ *Note* : Bot needs admin rights for this action
+╰──────❍
+
+_📌 Please make bot admin for full protection_
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, noAdminMsg, [], msg);
+                return;
+            }
+            await setAntiMedia(chatId, config.enabled, 'kick', config.blockedTypes);
+            await setSilentMode(chatId, false);
+            
+            const actionSetMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ✅ *Action* : Set to KICK
+├ 📝 *Description* : Kick users immediately
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, actionSetMsg, [], msg);
+            return;
+        }
+        
+        // ========== TOGGLE SILENT MODE ==========
+        if (action === 'silent') {
+            if (!config.enabled) {
+                const notEnabledMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ❌ *Error* : Anti-media is not enabled!
+├ 📝 *First enable with* : ${currentPrefix}antimedia on
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, notEnabledMsg, [], msg);
+                return;
+            }
+            
+            if (config.action !== 'delete') {
+                const wrongActionMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ ❌ *Error* : Silent mode only works with DELETE action!
+├ 📝 *Current action* : ${config.action.toUpperCase()}
+├ 🔧 *Use* : ${currentPrefix}antimedia delete
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+                await sendStyledMessage(sock, chatId, wrongActionMsg, [], msg);
+                return;
+            }
+            
+            const currentSilent = await getSilentMode(chatId);
+            const newSilent = !currentSilent;
+            await setSilentMode(chatId, newSilent);
+            
+            const silentMsg = `╭──❍「 *🖼️ ANTI-MEDIA* 」❍
+├ 🔇 *Silent Mode* : ${newSilent ? 'ENABLED' : 'DISABLED'}
+├ 📝 *Effect* : ${newSilent ? 'Media deleted silently - No messages sent' : 'Media deleted with warning messages'}
+╰──────❍
+
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
+            await sendStyledMessage(sock, chatId, silentMsg, [], msg);
             return;
         }
         
@@ -393,4 +701,4 @@ ${blockedList}
 };
 
 // Export for use in index.js
-export { setAntiMedia, removeAntiMedia };
+export { setAntiMedia, removeAntiMedia, handleMediaDetection };
