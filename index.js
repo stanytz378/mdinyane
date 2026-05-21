@@ -1475,18 +1475,18 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
             const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
             const successMessage = `
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃🌟 WELCOME TO MDINYANE 🌟      
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━┓
+┃🌟WELCOME TO MDINYANE🌟      
+┗━━━━━━━━━━━━━━━━━━━━━┛
 
-╭━━❲ 🔐 DEVICE STATUS ❳━━⬣
+╭━━❲ 🔐DEVICE STATUS ❳━━⬣
 ┃
 ┃  ✅ *Linked Successfully*
 ┃  🤖 *Bot:* ${BOT_NAME} v${VERSION}
 ┃  📱 *Your Number:* +${ownerInfo.ownerNumber}
 ┃  ⏰ *Time:* ${time} | 📅 ${date}
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 📋 BOT INFO ❳━━⬣
 ┃
@@ -1497,13 +1497,13 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃
 ╰━━━━━━━━━━━━━━━━━━━⬣
 
-╭━━❲ 🎯 QUICK START ❳━━⬣
+╭━━❲ 🎯QUICK START ❳━━⬣
 ┃
 ┃  ✨ \`${prefixDisplay}menu\` - Show all commands
 ┃  📢 \`${prefixDisplay}owner\` - Contact owner
 ┃  📸 \`${prefixDisplay}sticker\` - Convert to sticker
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━❲ 🔔 IMPORTANT ❳━━⬣
 ┃
@@ -1512,11 +1512,11 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  ⚠️ *Note:* Bot may take few seconds to respond
 ┃  💡 Type \`${prefixDisplay}help\` for detailed guide
 ┃
-╰━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━⬣
 
-┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃   🎉 THANK YOU FOR CHOOSING US 🎉   
-┗━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━┓
+┃🎉 THANK YOU FOR CHOOSING US 🎉   
+┗━━━━━━━━━━━━━━━━━━┛
 
 > *MDINYANE - WhatsApp Bot | ᴾᵒʷᵉʳᵉᵈ ᵇʸ ˢᵀᴬᴺʸ ᵀᶻ*
             `.trim();
