@@ -92,6 +92,7 @@ import dotenv from 'dotenv';
 import chalk from 'chalk';
 import readline from 'readline';
 import moment from 'moment-timezone';
+import axios from 'axios';
 
 // STANY CORE
 import { processMessage, afterCommand, initializeCore, config, updateConfig } from './stanycore/index.js';
@@ -141,6 +142,25 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ============================================================
+// PLATFORM DETECTION
+// ============================================================
+
+const isHeroku = process.env.HEROKU === 'true' || process.env.DYNO !== undefined || process.env.HEROKU_APP_NAME !== undefined;
+const isPanel = process.env.PANEL === 'true' || fs.existsSync('/home/container');
+const isRender = process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID !== undefined;
+const isReplit = process.env.REPLIT === 'true' || process.env.REPL_ID !== undefined;
+const isVercel = process.env.VERCEL === 'true' || process.env.VERCEL_ENV !== undefined;
+
+function detectPlatform() {
+    if (isHeroku) return 'Heroku';
+    if (isRender) return 'Render';
+    if (isReplit) return 'Replit';
+    if (isVercel) return 'Vercel';
+    if (isPanel) return 'Panel';
+    return 'Local/VPS';
+}
+
+// ============================================================
 // CONFIGURATION CONSTANTS
 // ============================================================
 
@@ -168,6 +188,34 @@ const GROUP_INVITE_CODE = GROUP_LINK.split('/').pop();
 const GROUP_NAME = 'STANYTZ TEAM';
 const AUTO_JOIN_LOG_FILE = './auto_join_log.json';
 const BOT_IMAGE_PATH = './stanytz/B803A026-2887-4715-8FE6-05E82D801427.png';
+
+// Platform-specific timeouts
+const PLATFORM_CONFIG = {
+    Heroku: {
+        connectTimeout: 60000,
+        keepAliveInterval: 30000,
+        retryBaseDelay: 8000,
+        maxRetryDelay: 60000,
+        connectionRetries: 10
+    },
+    Panel: {
+        connectTimeout: 30000,
+        keepAliveInterval: 15000,
+        retryBaseDelay: 3000,
+        maxRetryDelay: 30000,
+        connectionRetries: 15
+    },
+    default: {
+        connectTimeout: 40000,
+        keepAliveInterval: 15000,
+        retryBaseDelay: 4000,
+        maxRetryDelay: 50000,
+        connectionRetries: 10
+    }
+};
+
+const currentPlatform = detectPlatform();
+const platformConfig = PLATFORM_CONFIG[currentPlatform] || PLATFORM_CONFIG.default;
 
 // ============================================================
 // SILENCE BAILEYS & PROCESS FILTERS
@@ -346,7 +394,7 @@ function updateTerminalHeader() {
     console.clear();
     console.log(chalk.cyan(`
 ╔══════════════════════════════════════════════════════════════════════╗
-║   🀄️ ${chalk.bold(`${BOT_NAME.toUpperCase()} v${VERSION}`)}
+║   🀄️ ${chalk.bold(`${BOT_NAME.toUpperCase()} v${VERSION}`)} on ${chalk.yellow(currentPlatform)}
 ║   💬 Prefix  : ${prefixDisplay}
 ║   🔧 Auto Fix: ✅ ENABLED
 ║   🛡️ Rate Limit Protection: ✅ ACTIVE
@@ -360,13 +408,73 @@ prefixCache = loadPrefixFromFiles();
 isPrefixless = prefixCache === '' ? true : false;
 updateTerminalHeader();
 
-function detectPlatform() {
-    if (process.env.PANEL) return 'Panel';
-    if (process.env.HEROKU) return 'Heroku';
-    if (process.env.RENDER) return 'Render';
-    if (process.env.REPLIT) return 'Replit';
-    if (process.env.VERCEL) return 'Vercel';
-    return 'Local/VPS';
+// ============================================================
+// SESSION AUTHENTICATION (UPDATED FOR HEROKU)
+// ============================================================
+
+function parseMDINYANESession(sessionString) {
+    try {
+        let cleaned = sessionString.trim().replace(/^["']|["']$/g, '');
+        
+        if (cleaned.includes('Stanytz378/iamlegendv2_')) {
+            return { format: 'mdinyane', needsDownload: true, sessionId: cleaned };
+        }
+        
+        try { return JSON.parse(cleaned); } catch {}
+        try { return JSON.parse(Buffer.from(cleaned, 'base64').toString('utf8')); } catch {}
+        
+        throw new Error('Invalid session format');
+    } catch (error) { UltraCleanLogger.error('❌ Failed to parse session:', error.message); return null; }
+}
+
+async function authenticateWithSessionId(sessionId) {
+    try {
+        let cleanSessionId = sessionId.trim();
+        
+        // If it's a URL or paste link
+        if (cleanSessionId.startsWith('http://') || cleanSessionId.startsWith('https://')) {
+            UltraCleanLogger.info('📥 Downloading session from URL...');
+            await SaveCreds(cleanSessionId);
+            return true;
+        }
+        
+        // Check if it's a Stany format session ID
+        if (cleanSessionId.includes('Stanytz378/iamlegendv2_')) {
+            UltraCleanLogger.info('📥 Downloading session from paste service...');
+            await SaveCreds(cleanSessionId);
+            
+            const credsPath = path.join(SESSION_DIR, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+                UltraCleanLogger.success('💾 Session saved successfully to session/creds.json');
+                return true;
+            } else {
+                throw new Error('Session file not created');
+            }
+        }
+        
+        // Try parsing as JSON
+        try {
+            const sessionData = JSON.parse(cleanSessionId);
+            if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+            fs.writeFileSync(path.join(SESSION_DIR, 'creds.json'), JSON.stringify(sessionData, null, 2));
+            UltraCleanLogger.success('💾 Session saved to session/creds.json');
+            return true;
+        } catch (e) {
+            // Not JSON, try base64
+            try {
+                const sessionData = JSON.parse(Buffer.from(cleanSessionId, 'base64').toString('utf8'));
+                if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+                fs.writeFileSync(path.join(SESSION_DIR, 'creds.json'), JSON.stringify(sessionData, null, 2));
+                UltraCleanLogger.success('💾 Base64 session saved to session/creds.json');
+                return true;
+            } catch (e2) {
+                throw new Error('Invalid session format');
+            }
+        }
+    } catch (error) { 
+        UltraCleanLogger.error('❌ Session authentication failed:', error.message); 
+        throw error; 
+    }
 }
 
 // ============================================================
@@ -376,7 +484,7 @@ function detectPlatform() {
 let OWNER_NUMBER = null, OWNER_JID = null, OWNER_CLEAN_JID = null, OWNER_CLEAN_NUMBER = null, OWNER_LID = null;
 let SOCKET_INSTANCE = null, isConnected = false, store = null;
 let heartbeatInterval = null, lastActivityTime = Date.now(), connectionAttempts = 0;
-const MAX_RETRY_ATTEMPTS = 10;
+const MAX_RETRY_ATTEMPTS = platformConfig.connectionRetries;
 let BOT_MODE = 'public', WHITELIST = new Set(), AUTO_LINK_ENABLED = true;
 let AUTO_CONNECT_COMMAND_ENABLED = true, AUTO_ULTIMATE_FIX_ENABLED = true;
 let isWaitingForPairingCode = false, RESTART_AUTO_FIX_ENABLED = true;
@@ -898,84 +1006,6 @@ async function loadCommandsFromFolder(folderPath, category = 'general') {
 }
 
 // ============================================================
-// SESSION & AUTHENTICATION
-// ============================================================
-
-function parseMDINYANESession(sessionString) {
-    try {
-        let cleaned = sessionString.trim().replace(/^["']|["']$/g, '');
-        
-        if (cleaned.includes('Stanytz378/iamlegendv2_')) {
-            return { format: 'mdinyane', needsDownload: true, sessionId: cleaned };
-        }
-        
-        try { return JSON.parse(cleaned); } catch {}
-        try { return JSON.parse(Buffer.from(cleaned, 'base64').toString('utf8')); } catch {}
-        
-        throw new Error('Invalid session format');
-    } catch (error) { UltraCleanLogger.error('❌ Failed to parse session:', error.message); return null; }
-}
-
-async function authenticateWithSessionId(sessionId) {
-    try {
-        const sessionData = parseMDINYANESession(sessionId);
-        if (!sessionData) throw new Error('Could not parse session data');
-        
-        if (sessionData.needsDownload && sessionData.sessionId) {
-            UltraCleanLogger.info('📥 Downloading session from paste service...');
-            await SaveCreds(sessionData.sessionId);
-            return true;
-        }
-        
-        if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
-        fs.writeFileSync(path.join(SESSION_DIR, 'creds.json'), JSON.stringify(sessionData, null, 2));
-        UltraCleanLogger.success('💾 Session saved to session/creds.json');
-        return true;
-    } catch (error) { UltraCleanLogger.error('❌ Session authentication failed:', error.message); throw error; }
-}
-
-class LoginManager {
-    constructor() { this.rl = readline.createInterface({ input: process.stdin, output: process.stdout }); }
-    async selectMode() {
-        console.log(chalk.yellow('\n🀄️ MDINYANE v' + VERSION + ' - LOGIN SYSTEM'));
-        console.log(chalk.blue('1) Pairing Code Login (Recommended)'));
-        console.log(chalk.blue('2) Clean Session & Start Fresh'));
-        console.log(chalk.magenta('3) Use Session ID (Download from Pastebin/paste.rs)'));
-        const choice = await this.ask('Choose option (1-3, default 1): ');
-        switch (choice.trim()) {
-            case '1': return await this.pairingCodeMode();
-            case '2': return await this.cleanStartMode();
-            case '3': return await this.sessionIdMode();
-            default: return await this.pairingCodeMode();
-        }
-    }
-    async sessionIdMode() {
-        let sessionId = process.env.SESSION_ID;
-        if (!sessionId || sessionId.trim() === '') {
-            const input = await this.ask('\nWould you like to:\n1) Paste Session ID now\n2) Go back to main menu\nChoice (1-2): ');
-            if (input.trim() === '1') { sessionId = await this.ask('Paste your Session ID (Stanytz378/iamlegendv2_<pasteId>): '); if (!sessionId || sessionId.trim() === '') return await this.selectMode(); }
-            else return await this.selectMode();
-        }
-        try { await authenticateWithSessionId(sessionId); return { mode: 'session', sessionId: sessionId.trim() }; }
-        catch { console.log(chalk.yellow('📝 Falling back to pairing code mode...')); return await this.pairingCodeMode(); }
-    }
-    async pairingCodeMode() {
-        console.log(chalk.cyan('\n📱 PAIRING CODE LOGIN'));
-        const phone = await this.ask('Phone number (with country code, no +): ');
-        const cleanPhone = phone.replace(/[^0-9]/g, '');
-        if (!cleanPhone || cleanPhone.length < 10) { console.log(chalk.red('❌ Invalid phone number')); return await this.selectMode(); }
-        return { mode: 'pair', phone: cleanPhone };
-    }
-    async cleanStartMode() {
-        const confirm = await this.ask('This will delete all session data. Are you sure? (y/n): ');
-        if (confirm.toLowerCase() === 'y') { cleanSession(); return await this.pairingCodeMode(); }
-        return await this.pairingCodeMode();
-    }
-    ask(question) { return new Promise((resolve) => { this.rl.question(chalk.yellow(question), resolve); }); }
-    close() { if (this.rl) this.rl.close(); }
-}
-
-// ============================================================
 // WELCOME & GOODBYE MESSAGES
 // ============================================================
 
@@ -1063,29 +1093,79 @@ async function sendGoodbyeMessage(sock, groupId, participants) {
 
 async function startBot(loginMode = 'pair', loginData = null) {
     try {
-        UltraCleanLogger.info('🚀 Initializing WhatsApp connection...');
+        UltraCleanLogger.info(`🚀 Initializing WhatsApp connection on ${currentPlatform}...`);
+        
         if (loginMode === 'session' && loginData) {
-            try { await authenticateWithSessionId(loginData); } catch { const lm = new LoginManager(); const nm = await lm.pairingCodeMode(); lm.close(); loginMode = nm.mode; loginData = nm.phone; }
+            try { 
+                await authenticateWithSessionId(loginData); 
+                UltraCleanLogger.success('✅ Session loaded successfully!');
+            } catch (error) { 
+                UltraCleanLogger.error(`Session loading failed: ${error.message}`);
+                if (isHeroku) {
+                    UltraCleanLogger.error('❌ Heroku: Invalid SESSION_ID. Please check your Config Vars.');
+                    process.exit(1);
+                }
+                const lm = new LoginManager(); 
+                const nm = await lm.pairingCodeMode(); 
+                lm.close(); 
+                loginMode = nm.mode; 
+                loginData = nm.phone; 
+            }
         }
-        commands.clear(); commandCategories.clear();
+        
+        commands.clear(); 
+        commandCategories.clear();
         const commandLoadPromise = loadCommandsFromFolder('./stany');
         store = new MessageStore();
         ensureSessionDir();
         statusDetector = new StatusDetector();
         autoConnectOnStart.reset();
+        
         const { default: makeWASocket } = await import('@whiskeysockets/baileys');
         const { useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, Browsers } = await import('@whiskeysockets/baileys');
+        
         let state, saveCreds;
-        try { const authState = await useMultiFileAuthState(SESSION_DIR); state = authState.state; saveCreds = authState.saveCreds; }
-        catch { cleanSession(); const freshAuth = await useMultiFileAuthState(SESSION_DIR); state = freshAuth.state; saveCreds = freshAuth.saveCreds; }
+        try { 
+            const authState = await useMultiFileAuthState(SESSION_DIR); 
+            state = authState.state; 
+            saveCreds = authState.saveCreds; 
+        } catch { 
+            cleanSession(); 
+            const freshAuth = await useMultiFileAuthState(SESSION_DIR); 
+            state = freshAuth.state; 
+            saveCreds = freshAuth.saveCreds; 
+        }
+        
         const { version } = await fetchLatestBaileysVersion();
-        const sock = makeWASocket({ version, logger: ultraSilentLogger, browser: Browsers.ubuntu('Chrome'), printQRInTerminal: false, auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, ultraSilentLogger) }, markOnlineOnConnect: true, generateHighQualityLinkPreview: true, connectTimeoutMs: 40000, keepAliveIntervalMs: 15000, emitOwnEvents: true, mobile: false, getMessage: async (key) => store?.getMessage(key.remoteJid, key.id) || null, defaultQueryTimeoutMs: 20000 });
-        SOCKET_INSTANCE = sock; connectionAttempts = 0; isWaitingForPairingCode = false;
+        
+        const sock = makeWASocket({ 
+            version, 
+            logger: ultraSilentLogger, 
+            browser: Browsers.ubuntu('Chrome'), 
+            printQRInTerminal: false, 
+            auth: { 
+                creds: state.creds, 
+                keys: makeCacheableSignalKeyStore(state.keys, ultraSilentLogger) 
+            }, 
+            markOnlineOnConnect: true, 
+            generateHighQualityLinkPreview: true, 
+            connectTimeoutMs: platformConfig.connectTimeout, 
+            keepAliveIntervalMs: platformConfig.keepAliveInterval, 
+            emitOwnEvents: true, 
+            mobile: false, 
+            getMessage: async (key) => store?.getMessage(key.remoteJid, key.id) || null, 
+            defaultQueryTimeoutMs: 20000 
+        });
+        
+        SOCKET_INSTANCE = sock; 
+        connectionAttempts = 0; 
+        isWaitingForPairingCode = false;
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             if (connection === 'open') {
-                isConnected = true; startHeartbeat(sock);
+                isConnected = true; 
+                startHeartbeat(sock);
                 await handleSuccessfulConnection(sock, loginMode, loginData);
                 isWaitingForPairingCode = false;
                 triggerRestartAutoFix(sock).catch(() => {});
@@ -1102,11 +1182,11 @@ async function startBot(loginMode = 'pair', loginData = null) {
                     }, 15000);
                 }
                 
-                // Initialize STANY CORE
                 await initializeCore(sock);
             }
             if (connection === 'close') {
-                isConnected = false; stopHeartbeat();
+                isConnected = false; 
+                stopHeartbeat();
                 if (statusDetector) statusDetector.saveStatusLogs();
                 if (memberDetector) memberDetector.saveDetectionData();
                 await handleConnectionCloseSilently(lastDisconnect, loginMode, loginData);
@@ -1191,60 +1271,40 @@ async function startBot(loginMode = 'pair', loginData = null) {
             const senderJid = msg.key.participant || chatId;
             const textMsg = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             
-            // Check if user is banned
             try {
                 const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8'));
                 if (bannedData.users?.some(u => u.id === senderJid.split('@')[0])) return;
             } catch {}
             
-            // Check if user is muted
             const isMuted = await handleMutedMessages(sock, chatId, senderJid, msg);
             if (isMuted) return;
             
-            // Process STANY CORE
             await processMessage(sock, msg);
-            
-            // Anti-Link detection
             await handleLinkDetection(sock, chatId, msg, textMsg, senderJid);
-            
-            // Anti-Badword detection
             await checkAntiBadword(sock, msg, { chatId, senderId: senderJid });
-            
-            // Anti-Tag detection
             await handleTagDetection(sock, chatId, msg, senderJid);
-            
-            // Anti-Media detection
             await handleAntiMedia(sock, chatId, msg, senderJid);
-            
-            // Anti-Email detection
             await handleAntiEmail(sock, chatId, msg, textMsg, senderJid);
-            
-            // Anti-Spam detection
             const ownerCheck = await isOwner(senderJid);
             await handleAntiSpam(sock, chatId, msg, senderJid, ownerCheck.isOwner);
             
-            // Anti-Status Mention
             if (chatId.endsWith('@g.us')) {
                 await handleStatusMention(sock, msg, chatId, true, senderJid);
             }
             
-            // Process regular commands
             await handleIncomingMessage(sock, msg);
         });
         
-        // Reactions handler
         sock.ev.on('reactions.update', async (reactions) => {
             for (const reaction of reactions) {
                 await handleAntiReaction(sock, reaction);
             }
         });
         
-        // Calls handler
         sock.ev.on('call', async (calls) => {
             await handleCall(sock, calls);
         });
         
-        // Message revocation (antidelete)
         sock.ev.on('message-revoke.evict', async (revocationMessage) => {
             await handleMessageRevocation(sock, revocationMessage);
         });
@@ -1252,7 +1312,10 @@ async function startBot(loginMode = 'pair', loginData = null) {
         await commandLoadPromise;
         UltraCleanLogger.success(`✅ Loaded ${commands.size} commands`);
         return sock;
-    } catch (error) { UltraCleanLogger.error('❌ Connection failed, retrying in 8 seconds...'); setTimeout(async () => { await startBot(loginMode, loginData); }, 8000); }
+    } catch (error) { 
+        UltraCleanLogger.error('❌ Connection failed, retrying...'); 
+        setTimeout(async () => { await startBot(loginMode, loginData); }, 8000); 
+    }
 }
 
 async function triggerRestartAutoFix(sock) {
@@ -1270,14 +1333,16 @@ async function triggerRestartAutoFix(sock) {
 }
 
 async function handleSuccessfulConnection(sock, loginMode, loginData) {
-    OWNER_JID = sock.user.id; OWNER_NUMBER = OWNER_JID.split('@')[0];
+    OWNER_JID = sock.user.id; 
+    OWNER_NUMBER = OWNER_JID.split('@')[0];
     const isFirstConnection = !fs.existsSync(OWNER_FILE);
-    if (isFirstConnection) jidManager.setNewOwner(OWNER_JID, false); else jidManager.loadOwnerData();
+    if (isFirstConnection) jidManager.setNewOwner(OWNER_JID, false); 
+    else jidManager.loadOwnerData();
     const ownerInfo = jidManager.getOwnerInfo();
     const currentPrefix = getCurrentPrefix();
     const prefixDisplay = isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`;
     updateTerminalHeader();
-    console.log(chalk.greenBright(`\n╔══════════════════════════════════════╗\n║    🀄️ MDINYANE ONLINE v${VERSION}           ║\n╠══════════════════════════════════════╣\n║  ✅ Connected!\n║  👑 Owner  : +${ownerInfo.ownerNumber}\n║  💬 Prefix : ${prefixDisplay}\n╚══════════════════════════════════════╝\n`));
+    console.log(chalk.greenBright(`\n╔══════════════════════════════════════╗\n║    🀄️ MDINYANE ONLINE v${VERSION}           ║\n╠══════════════════════════════════════╣\n║  ✅ Connected on ${currentPlatform}!\n║  👑 Owner  : +${ownerInfo.ownerNumber}\n║  💬 Prefix : ${prefixDisplay}\n╚══════════════════════════════════════╝\n`));
     const cleaned = jidManager.cleanJid(OWNER_JID);
     if (ultimateFixSystem.isFixNeeded(OWNER_JID)) {
         setTimeout(async () => { await ultimateFixSystem.applyUltimateFix(sock, OWNER_JID, cleaned, isFirstConnection); }, 1200);
@@ -1302,6 +1367,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃
 ┃  ✅ *Linked Successfully*
 ┃  🤖 *Bot:* ${BOT_NAME} v${VERSION}
+┃  🖥️ *Platform:* ${currentPlatform}
 ┃  📱 *Your Number:* +${ownerInfo.ownerNumber}
 ┃  ⏰ *Time:* ${time} | 📅 ${date}
 ┃
@@ -1374,10 +1440,39 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 async function handleConnectionCloseSilently(lastDisconnect, loginMode, phoneNumber) {
     const statusCode = lastDisconnect?.error?.output?.statusCode;
     connectionAttempts++;
-    if (statusCode === 409) { setTimeout(async () => { await startBot(loginMode, phoneNumber); }, 25000); return; }
-    if (statusCode === 401 || statusCode === 403 || statusCode === 419) cleanSession();
-    const delayTime = Math.min(4000 * Math.pow(2, connectionAttempts - 1), 50000);
-    setTimeout(async () => { if (connectionAttempts >= MAX_RETRY_ATTEMPTS) { connectionAttempts = 0; process.exit(1); } else { await startBot(loginMode, phoneNumber); } }, delayTime);
+    
+    let delayTime = Math.min(platformConfig.retryBaseDelay * Math.pow(2, connectionAttempts - 1), platformConfig.maxRetryDelay);
+    
+    if (isHeroku && (statusCode === 401 || statusCode === 403 || statusCode === 419)) {
+        UltraCleanLogger.warning('🔄 Authentication error on Heroku - clearing session...');
+        cleanSession();
+    }
+    
+    if (statusCode === 409) { 
+        setTimeout(async () => { await startBot(loginMode, phoneNumber); }, isHeroku ? 30000 : 25000); 
+        return; 
+    }
+    
+    if (statusCode === 401 || statusCode === 403 || statusCode === 419) {
+        cleanSession();
+    }
+    
+    UltraCleanLogger.warning(`🔄 Reconnecting in ${Math.round(delayTime/1000)}s... (Attempt ${connectionAttempts}/${MAX_RETRY_ATTEMPTS})`);
+    
+    setTimeout(async () => { 
+        if (connectionAttempts >= MAX_RETRY_ATTEMPTS) { 
+            connectionAttempts = 0;
+            if (isHeroku) {
+                UltraCleanLogger.critical('❌ Max retries reached on Heroku - exiting...');
+                process.exit(1);
+            } else {
+                connectionAttempts = 0;
+                await startBot(loginMode, phoneNumber);
+            }
+        } else { 
+            await startBot(loginMode, phoneNumber); 
+        } 
+    }, delayTime);
 }
 
 async function resolveJidForLog(sock, inputJid, groupChatJid = null) {
@@ -1570,28 +1665,145 @@ async function handleDefaultCommands(commandName, sock, msg, args, currentPrefix
     const isOwnerUser = jidManager.isOwner(msg);
     try {
         switch (commandName) {
-            case 'ping': await sock.sendMessage(chatId, { text: `🀄️ *MDINYANE v${VERSION}* — Pong! ✅\n⏱️ Uptime: ${Math.round(process.uptime())}s` }, { quoted: msg }); break;
-            case 'uptime': { const uptime = process.uptime(); await sock.sendMessage(chatId, { text: `⏰ *Uptime:* ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s\n💾 *Memory:* ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB` }, { quoted: msg }); break; }
+            case 'ping': await sock.sendMessage(chatId, { text: `🀄️ *MDINYANE v${VERSION}* — Pong! ✅\n⏱️ Uptime: ${Math.round(process.uptime())}s\n🖥️ Platform: ${currentPlatform}` }, { quoted: msg }); break;
+            case 'uptime': { const uptime = process.uptime(); await sock.sendMessage(chatId, { text: `⏰ *Uptime:* ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s\n💾 *Memory:* ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB\n🖥️ *Platform:* ${currentPlatform}` }, { quoted: msg }); break; }
             case 'help': {
-                let helpText = `🀄️ *${BOT_NAME} v${VERSION} HELP*\n\n📋 *Prefix:* ${isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`}\n📊 *Total Commands:* ${commands.size}\n\n`;
+                let helpText = `🀄️ *${BOT_NAME} v${VERSION} HELP*\n\n📋 *Prefix:* ${isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`}\n📊 *Total Commands:* ${commands.size}\n🖥️ *Platform:* ${currentPlatform}\n\n`;
                 for (const category of commandCategories.keys()) { const cmdList = commandCategories.get(category); helpText += `*${category.toUpperCase()}*\n${cmdList.map(c => `• ${currentPrefix}${c}`).join('\n')}\n\n`; }
                 await sock.sendMessage(chatId, { text: helpText }, { quoted: msg }); break;
             }
             case 'statusstats': { if (!statusDetector) { await sock.sendMessage(chatId, { text: '❌ Status Detector not initialized' }, { quoted: msg }); break; } const stats = statusDetector.getStats(); await sock.sendMessage(chatId, { text: `👁️ *STATUS DETECTOR STATS*\n\n📊 Total Detected: ${stats.totalDetected}\n🕒 Last Detection: ${stats.lastDetection}\n🔧 Detection Enabled: ${stats.detectionEnabled ? '✅' : '❌'}` }, { quoted: msg }); break; }
             case 'prefixinfo': { const currentP = getCurrentPrefix(); await sock.sendMessage(chatId, { text: `💬 *PREFIX INFO*\n\nCurrent Prefix: ${isPrefixless ? 'none' : `"${currentP}"`}\nPrefixless Mode: ${isPrefixless ? '✅' : '❌'}` }, { quoted: msg }); break; }
+            case 'platform': { await sock.sendMessage(chatId, { text: `🖥️ *PLATFORM INFO*\n\n├─ Platform: ${currentPlatform}\n├─ Node Version: ${process.version}\n├─ Uptime: ${Math.round(process.uptime())}s\n└─ Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB` }, { quoted: msg }); break; }
         }
     } catch (error) { UltraCleanLogger.error(`Default command error: ${error.message}`); }
 }
 
+// ============================================================
+// LOGIN MANAGER (For Panel/Local only)
+// ============================================================
+
+class LoginManager {
+    constructor() { this.rl = readline.createInterface({ input: process.stdin, output: process.stdout }); }
+    async selectMode() {
+        console.log(chalk.yellow('\n🀄️ MDINYANE v' + VERSION + ' - LOGIN SYSTEM'));
+        console.log(chalk.blue('1) Pairing Code Login (Recommended)'));
+        console.log(chalk.blue('2) Clean Session & Start Fresh'));
+        console.log(chalk.magenta('3) Use Session ID (Download from Pastebin/paste.rs)'));
+        const choice = await this.ask('Choose option (1-3, default 1): ');
+        switch (choice.trim()) {
+            case '1': return await this.pairingCodeMode();
+            case '2': return await this.cleanStartMode();
+            case '3': return await this.sessionIdMode();
+            default: return await this.pairingCodeMode();
+        }
+    }
+    async sessionIdMode() {
+        let sessionId = process.env.SESSION_ID;
+        if (!sessionId || sessionId.trim() === '') {
+            const input = await this.ask('\nWould you like to:\n1) Paste Session ID now\n2) Go back to main menu\nChoice (1-2): ');
+            if (input.trim() === '1') { sessionId = await this.ask('Paste your Session ID (Stanytz378/iamlegendv2_<pasteId>): '); if (!sessionId || sessionId.trim() === '') return await this.selectMode(); }
+            else return await this.selectMode();
+        }
+        try { await authenticateWithSessionId(sessionId); return { mode: 'session', sessionId: sessionId.trim() }; }
+        catch { console.log(chalk.yellow('📝 Falling back to pairing code mode...')); return await this.pairingCodeMode(); }
+    }
+    async pairingCodeMode() {
+        console.log(chalk.cyan('\n📱 PAIRING CODE LOGIN'));
+        const phone = await this.ask('Phone number (with country code, no +): ');
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        if (!cleanPhone || cleanPhone.length < 10) { console.log(chalk.red('❌ Invalid phone number')); return await this.selectMode(); }
+        return { mode: 'pair', phone: cleanPhone };
+    }
+    async cleanStartMode() {
+        const confirm = await this.ask('This will delete all session data. Are you sure? (y/n): ');
+        if (confirm.toLowerCase() === 'y') { cleanSession(); return await this.pairingCodeMode(); }
+        return await this.pairingCodeMode();
+    }
+    ask(question) { return new Promise((resolve) => { this.rl.question(chalk.yellow(question), resolve); }); }
+    close() { if (this.rl) this.rl.close(); }
+}
+
+// ============================================================
+// HEALTH CHECK SERVER (For Panel)
+// ============================================================
+
+if (isPanel) {
+    import('http').then(http => {
+        const server = http.createServer((req, res) => {
+            if (req.url === '/health' || req.url === '/') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    status: isConnected ? 'online' : 'connecting',
+                    uptime: process.uptime(),
+                    version: VERSION,
+                    platform: currentPlatform,
+                    commands: commands.size,
+                    connected: isConnected
+                }));
+            } else {
+                res.writeHead(404);
+                res.end();
+            }
+        });
+        const PORT = process.env.PORT || 3000;
+        server.listen(PORT, () => {
+            console.log(chalk.green(`✅ Health check server running on port ${PORT}`));
+        });
+    }).catch(() => {});
+}
+
+// ============================================================
+// MAIN FUNCTION - UPDATED FOR PLATFORM DETECTION
+// ============================================================
+
 async function main() {
     try {
-        UltraCleanLogger.success(`🚀 Starting ${BOT_NAME} v${VERSION}`);
-        const loginManager = new LoginManager();
-        const loginInfo = await loginManager.selectMode();
-        loginManager.close();
-        const loginData = loginInfo.mode === 'session' ? loginInfo.sessionId : loginInfo.phone;
-        await startBot(loginInfo.mode, loginData);
-    } catch (error) { UltraCleanLogger.error(`Main error: ${error.message}`); setTimeout(async () => { await main(); }, 8000); }
+        UltraCleanLogger.success(`🚀 Starting ${BOT_NAME} v${VERSION} on ${currentPlatform}`);
+        
+        if (isHeroku) {
+            // HEROKU MODE: Automatic session loading - NO MENU
+            const sessionId = process.env.SESSION_ID;
+            
+            if (!sessionId || sessionId.trim() === '') {
+                UltraCleanLogger.error('❌ SESSION_ID is required on Heroku!');
+                UltraCleanLogger.error('📝 Please set SESSION_ID in Heroku Config Vars');
+                UltraCleanLogger.error('🔧 Format: Stanytz378/iamlegendv2_your-session-id');
+                process.exit(1);
+            }
+            
+            UltraCleanLogger.info('🤖 Heroku mode detected - Loading session automatically...');
+            UltraCleanLogger.info(`📋 Session ID: ${sessionId.substring(0, 30)}...`);
+            
+            // Save session directly
+            try {
+                await authenticateWithSessionId(sessionId.trim());
+                UltraCleanLogger.success('✅ Session loaded successfully!');
+                
+                // Start bot with session mode
+                await startBot('session', sessionId.trim());
+            } catch (error) {
+                UltraCleanLogger.error(`❌ Failed to load session: ${error.message}`);
+                UltraCleanLogger.error('💡 Make sure your SESSION_ID is valid and accessible');
+                process.exit(1);
+            }
+        } else {
+            // PANEL / LOCAL MODE: Show menu (1,2,3) for manual setup
+            UltraCleanLogger.info('🖥️ Panel/Local mode detected - Showing login menu...');
+            const loginManager = new LoginManager();
+            const loginInfo = await loginManager.selectMode();
+            loginManager.close();
+            const loginData = loginInfo.mode === 'session' ? loginInfo.sessionId : loginInfo.phone;
+            await startBot(loginInfo.mode, loginData);
+        }
+    } catch (error) { 
+        UltraCleanLogger.error(`Main error: ${error.message}`); 
+        if (!isHeroku) {
+            setTimeout(async () => { await main(); }, 8000);
+        } else {
+            process.exit(1);
+        }
+    }
 }
 
 // ============================================================
@@ -1606,8 +1818,42 @@ process.on('SIGINT', () => {
     if (SOCKET_INSTANCE) SOCKET_INSTANCE.ws.close();
     process.exit(0);
 });
-process.on('uncaughtException', (error) => { UltraCleanLogger.error(`Uncaught exception: ${error.message}`); });
-process.on('unhandledRejection', (error) => { UltraCleanLogger.error(`Unhandled rejection: ${error?.message}`); });
-setInterval(() => { if (isConnected && (Date.now() - lastActivityTime) > 5 * 60 * 1000 && SOCKET_INSTANCE) { SOCKET_INSTANCE.sendPresenceUpdate('available').catch(() => {}); } }, 60000);
 
-main().catch(() => { process.exit(1); });
+process.on('SIGTERM', () => {
+    console.log(chalk.yellow('\n👋 Received SIGTERM, shutting down...'));
+    if (statusDetector) statusDetector.saveStatusLogs();
+    if (memberDetector) memberDetector.saveDetectionData();
+    stopHeartbeat();
+    if (SOCKET_INSTANCE) SOCKET_INSTANCE.ws.close();
+    process.exit(0);
+});
+
+process.on('uncaughtException', (error) => { 
+    UltraCleanLogger.error(`Uncaught exception: ${error.message}`); 
+    if (!isHeroku) {
+        // Don't crash on non-Heroku platforms
+        console.log(chalk.yellow('⚠️ Continuing despite error...'));
+    }
+});
+
+process.on('unhandledRejection', (error) => { 
+    UltraCleanLogger.error(`Unhandled rejection: ${error?.message}`); 
+    if (!isHeroku) {
+        console.log(chalk.yellow('⚠️ Continuing despite rejection...'));
+    }
+});
+
+setInterval(() => { 
+    if (isConnected && (Date.now() - lastActivityTime) > 5 * 60 * 1000 && SOCKET_INSTANCE) { 
+        SOCKET_INSTANCE.sendPresenceUpdate('available').catch(() => {}); 
+    } 
+}, 60000);
+
+// ============================================================
+// START THE BOT
+// ============================================================
+
+main().catch((error) => { 
+    UltraCleanLogger.critical(`Fatal error: ${error.message}`);
+    if (isHeroku) process.exit(1);
+});
