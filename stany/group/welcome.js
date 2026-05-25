@@ -92,9 +92,7 @@ export async function sendWelcomeMessage(sock, groupId, participants) {
             } catch (e) {}
             
             // Build welcome message
-            let welcomeMsg = `╭━━━━╮
-┃              🎉 WELCOME 🎉              
-╰━━━━━━━━╯
+            let welcomeMsg = `🎉 WELCOME NEW FRIEND🎉              
 
 🎉 Welcome @${participantName} to ${groupName} Group!`;
             
