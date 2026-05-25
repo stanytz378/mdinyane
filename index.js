@@ -1354,9 +1354,9 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
             const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
             const successMessage = `
-┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃🌟 WELCOME TO MDINYANE 🌟  
-┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━┓
+┃🌟WELCOME TO MDINYANE🌟  
+┗━━━━━━━━━━━━━━━━━┛
 
 ╭━━❲ 🔐 DEVICE STATUS ❳━━⬣
 ┃
