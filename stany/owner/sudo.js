@@ -13,13 +13,13 @@ import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
 import { channelInfo } from '../../stanytz/messageConfig.js';
-import isOwner from '../../stanymain/isOwner.js';
 
 // ============================================================
 // FILE PATHS
 // ============================================================
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const SUDO_FILE = path.join(DATA_DIR, 'sudo_users.json');
+const OWNER_FILE = path.join(process.cwd(), 'owner.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -27,6 +27,73 @@ if (!fs.existsSync(DATA_DIR)) {
 
 if (!fs.existsSync(SUDO_FILE)) {
     fs.writeFileSync(SUDO_FILE, JSON.stringify({ users: [] }, null, 2));
+}
+
+// ============================================================
+// ENHANCED OWNER CHECK (NO EXTERNAL DEPENDENCY)
+// ============================================================
+
+function isUserOwner(senderId, sock) {
+    try {
+        if (!senderId) return false;
+        
+        // Clean the sender number
+        let senderNumber = senderId;
+        if (senderNumber.includes('@')) senderNumber = senderNumber.split('@')[0];
+        if (senderNumber.includes(':')) senderNumber = senderNumber.split(':')[0];
+        senderNumber = senderNumber.replace(/[^0-9]/g, '');
+        
+        if (!senderNumber || senderNumber.length < 5) return false;
+        
+        // Method 1: Check owner.json file
+        if (fs.existsSync(OWNER_FILE)) {
+            try {
+                const ownerData = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+                const ownerNumber = ownerData.OWNER_CLEAN_NUMBER || ownerData.OWNER_NUMBER;
+                if (ownerNumber && senderNumber === ownerNumber) {
+                    return true;
+                }
+            } catch (e) {}
+        }
+        
+        // Method 2: Check from connected device (sock)
+        if (sock && sock.user && sock.user.id) {
+            let botNumber = sock.user.id;
+            if (botNumber.includes('@')) botNumber = botNumber.split('@')[0];
+            if (botNumber.includes(':')) botNumber = botNumber.split(':')[0];
+            botNumber = botNumber.replace(/[^0-9]/g, '');
+            
+            if (senderNumber === botNumber) {
+                // Auto-save owner.json if not exists
+                if (!fs.existsSync(OWNER_FILE)) {
+                    const ownerData = {
+                        OWNER_JID: sock.user.id,
+                        OWNER_NUMBER: botNumber,
+                        OWNER_CLEAN_JID: sock.user.id,
+                        OWNER_CLEAN_NUMBER: botNumber,
+                        linkedAt: new Date().toISOString()
+                    };
+                    fs.writeFileSync(OWNER_FILE, JSON.stringify(ownerData, null, 2));
+                    console.log(`[OWNER] Auto-saved owner: ${botNumber}`);
+                }
+                return true;
+            }
+        }
+        
+        // Method 3: Check environment variable
+        const envOwner = process.env.OWNER_NUMBER;
+        if (envOwner) {
+            const cleanEnv = envOwner.replace(/[^0-9]/g, '');
+            if (senderNumber === cleanEnv) {
+                return true;
+            }
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Owner check error:', error);
+        return false;
+    }
 }
 
 // ============================================================
@@ -89,7 +156,26 @@ function getSudoList() {
 
 function cleanNumber(jid) {
     if (!jid) return '';
-    return jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    // Handle JID format
+    let clean = jid;
+    if (clean.includes('@')) clean = clean.split('@')[0];
+    if (clean.includes(':')) clean = clean.split(':')[0];
+    return clean.replace(/[^0-9]/g, '');
+}
+
+function getOwnerNumber(sock) {
+    try {
+        if (fs.existsSync(OWNER_FILE)) {
+            const data = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+            return data.OWNER_CLEAN_NUMBER || data.OWNER_NUMBER;
+        }
+        if (sock && sock.user && sock.user.id) {
+            return sock.user.id.split('@')[0].replace(/[^0-9]/g, '');
+        }
+        return null;
+    } catch {
+        return null;
+    }
 }
 
 function getTargetId(msg, args) {
@@ -109,7 +195,7 @@ function getTargetId(msg, args) {
     }
     
     // Check if number provided
-    const number = args[0]?.trim();
+    const number = args[1]?.trim();
     if (number && number.match(/^[0-9]{10,15}$/)) {
         return `${number}@s.whatsapp.net`;
     }
@@ -129,7 +215,9 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
             mentions: mentions
         }, { quoted: quoted });
     } catch (error) {
-        await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        try {
+            await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        } catch (e) {}
     }
 }
 
@@ -141,19 +229,22 @@ export default {
     name: 'sudo',
     description: 'Manage sudo users (bot admins)',
     icon: '👑',
-    alias: ['admin', 'sudoer', 'addsudo'],
+    alias: ['admin', 'sudoer', 'addsudo', 'sudoers'],
     category: 'owner',
     ownerOnly: true,
     
-    async execute(sock, msg, args, currentPrefix, { isOwner, jidManager }) {
+    async execute(sock, msg, args, currentPrefix, options) {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        const ownerCheck = await isOwner(senderId, jidManager);
-        if (!ownerCheck.isOwner) {
+        // Check if sender is owner (using enhanced function)
+        const isOwnerUser = isUserOwner(senderId, sock);
+        
+        if (!isOwnerUser) {
+            const senderName = senderId.split('@')[0];
             await sendStyledMessage(sock, chatId, `╭──❍「 *👑 SUDO* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Owner only command!
+├ 👤 @${senderName}
+├ ❌ *Owner only command!*
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [senderId], msg);
             return;
@@ -163,6 +254,9 @@ export default {
         const now = moment().tz('Africa/Dar_es_Salaam');
         const date = now.format('DD/MM/YYYY');
         const time = now.format('HH:mm:ss');
+        const day = now.format('dddd');
+        
+        const ownerNumber = getOwnerNumber(sock);
         
         // ============================================================
         // LIST SUDO USERS
@@ -173,7 +267,9 @@ export default {
             if (sudoUsers.length === 0) {
                 await sendStyledMessage(sock, chatId, `╭──❍「 *👑 SUDO USERS* 」❍
 ├ 📝 *No sudo users found*
+├ 👑 *Owner* : +${ownerNumber || 'Not set'}
 ├ 📅 *Date* : ${date}
+├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 _📌 Use ${currentPrefix}sudo add @user to add_
@@ -186,7 +282,9 @@ _📌 Use ${currentPrefix}sudo add @user to add_
                 listText += `├ ${i + 1}. +${sudoUsers[i]}\n`;
             }
             listText += `├ 📊 *Total* : ${sudoUsers.length}\n`;
+            listText += `├ 👑 *Owner* : +${ownerNumber || 'Not set'}\n`;
             listText += `├ 📅 *Date* : ${date}\n`;
+            listText += `├ 📆 *Day* : ${day}\n`;
             listText += `├ ⏰ *Time* : ${time} EAT\n`;
             listText += `╰──────❍\n`;
             listText += `_📌 Sudo users can use owner commands_\n`;
@@ -220,7 +318,6 @@ _📌 Use ${currentPrefix}sudo add @user to add_
             }
             
             const cleanTarget = cleanNumber(targetId);
-            const ownerNumber = cleanNumber(OWNER_NUMBER || jidManager?.owner?.cleanNumber);
             
             // Check if trying to add owner
             if (cleanTarget === ownerNumber) {
@@ -249,6 +346,7 @@ _📌 Use ${currentPrefix}sudo add @user to add_
 ├ ✅ *User* : +${cleanTarget}
 ├ 👑 *Added By* : @${senderId.split('@')[0]}
 ├ 📅 *Date* : ${date}
+├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 _📌 User can now use owner commands_
@@ -317,6 +415,7 @@ _📌 Use this power responsibly_
 ├ ❌ *User* : +${cleanTarget}
 ├ 👑 *Removed By* : @${senderId.split('@')[0]}
 ├ 📅 *Date* : ${date}
+├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 _📌 User can no longer use owner commands_
@@ -350,7 +449,6 @@ Contact the bot owner for more information.
             
             const cleanTarget = cleanNumber(targetId);
             const isSudo = isSudoUser(targetId);
-            const ownerNumber = cleanNumber(OWNER_NUMBER || jidManager?.owner?.cleanNumber);
             const isMainOwner = cleanTarget === ownerNumber;
             
             let role = '👤 USER';
@@ -369,6 +467,7 @@ Contact the bot owner for more information.
 ├ ${roleIcon} *Role* : ${role}
 ├ 🔧 *Sudo* : ${isSudo ? '✅ Yes' : '❌ No'}
 ├ 📅 *Date* : ${date}
+├ 📆 *Day* : ${day}
 ├ ⏰ *Time* : ${time} EAT
 ╰──────❍
 _📌 Sudo users can use owner commands_
@@ -377,7 +476,23 @@ _📌 Sudo users can use owner commands_
         }
         
         // ============================================================
-        // INVALID COMMAND
+        // CLEAR ALL SUDO USERS
+        // ============================================================
+        if (action === 'clear' || action === 'reset') {
+            saveSudoUsers([]);
+            
+            await sendStyledMessage(sock, chatId, `╭──❍「 *👑 SUDO* 」❍
+├ ✅ *All sudo users cleared*
+├ 👑 *Cleared By* : @${senderId.split('@')[0]}
+├ 📅 *Date* : ${date}
+├ ⏰ *Time* : ${time} EAT
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [senderId], msg);
+            return;
+        }
+        
+        // ============================================================
+        // HELP / INVALID COMMAND
         // ============================================================
         await sendStyledMessage(sock, chatId, `╭──❍「 *👑 SUDO COMMANDS* 」❍
 ├ 📝 *Available commands* :
@@ -386,12 +501,14 @@ _📌 Sudo users can use owner commands_
 │ 🔧 ${currentPrefix}sudo add @user - Add sudo user
 │ 🔧 ${currentPrefix}sudo remove @user - Remove sudo user
 │ 🔧 ${currentPrefix}sudo check @user - Check user status
+│ 🔧 ${currentPrefix}sudo clear - Clear all sudo users
 │
 ├ 📌 *Ways to add/remove* :
 │ • Reply to user's message
 │ • Tag the user
 │ • Type their number
 │
+├ 👑 *Owner* : +${ownerNumber || 'Not set'}
 ╰──────❍
 _📌 Sudo users get owner privileges_
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
