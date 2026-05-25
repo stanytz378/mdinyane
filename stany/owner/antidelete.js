@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { writeFile } from 'fs/promises';
 import { channelInfo, botImagePath } from '../../stanytz/messageConfig.js';
-import isOwner from '../../stanymain/isOwner.js';
+import isOwner, { isOwnerSimple, getOwnerInfo, forceSetOwner } from '../../stanymain/isOwner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +26,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(process.cwd(), 'stanydata');
 const ANTIDELETE_FILE = path.join(DATA_DIR, 'antidelete.json');
 const TEMP_MEDIA_DIR = path.join(DATA_DIR, 'temp_media');
+const OWNER_FILE = path.join(process.cwd(), 'owner.json');
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -49,6 +50,77 @@ const QUOTES = [
 ];
 
 const getRandomQuote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
+
+// ============================================================
+// ENHANCED OWNER CHECK FUNCTION
+// ============================================================
+
+async function checkIsOwner(senderId, jidManager, sock) {
+    try {
+        if (!senderId) return false;
+        
+        const cleanNumber = senderId.split('@')[0].replace(/[^0-9]/g, '');
+        
+        // Method 1: Check jidManager
+        if (jidManager && typeof jidManager.isOwner === 'function') {
+            const mockMsg = {
+                key: { participant: senderId, remoteJid: senderId, fromMe: false }
+            };
+            if (jidManager.isOwner(mockMsg)) {
+                return true;
+            }
+        }
+        
+        // Method 2: Check via sock (connected device)
+        if (sock && sock.user && sock.user.id) {
+            const botNumber = sock.user.id.split('@')[0].replace(/[^0-9]/g, '');
+            if (cleanNumber === botNumber) {
+                // Auto-fix owner.json
+                if (!fs.existsSync(OWNER_FILE)) {
+                    const ownerData = {
+                        OWNER_JID: sock.user.id,
+                        OWNER_NUMBER: botNumber,
+                        OWNER_CLEAN_JID: sock.user.id,
+                        OWNER_CLEAN_NUMBER: botNumber,
+                        linkedAt: new Date().toISOString(),
+                        method: 'auto-fixed'
+                    };
+                    fs.writeFileSync(OWNER_FILE, JSON.stringify(ownerData, null, 2));
+                }
+                return true;
+            }
+        }
+        
+        // Method 3: Check owner.json
+        if (fs.existsSync(OWNER_FILE)) {
+            const data = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+            const ownerNumber = data.OWNER_CLEAN_NUMBER || data.OWNER_NUMBER;
+            if (cleanNumber === ownerNumber) {
+                return true;
+            }
+        }
+        
+        // Method 4: Check environment
+        const envOwner = process.env.OWNER_NUMBER;
+        if (envOwner) {
+            const cleanEnv = envOwner.replace(/[^0-9]/g, '');
+            if (cleanNumber === cleanEnv) {
+                return true;
+            }
+        }
+        
+        // Method 5: Try the imported isOwner function
+        const result = await isOwner(senderId, jidManager);
+        if (result && result.isOwner) {
+            return true;
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Owner check error:', error);
+        return false;
+    }
+}
 
 // ============================================================
 // SEND WITH IMAGE AND FORWARDED MARK
@@ -141,6 +213,26 @@ async function saveAntideleteConfig(config) {
     } catch (error) {
         console.error('Config save error:', error);
         return false;
+    }
+}
+
+// ============================================================
+// GET OWNER JID
+// ============================================================
+
+function getOwnerJid(sock) {
+    try {
+        if (fs.existsSync(OWNER_FILE)) {
+            const data = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+            if (data.OWNER_CLEAN_JID) return data.OWNER_CLEAN_JID;
+            if (data.OWNER_JID) return data.OWNER_JID;
+        }
+        if (sock && sock.user && sock.user.id) {
+            return sock.user.id;
+        }
+        return null;
+    } catch {
+        return sock?.user?.id || null;
     }
 }
 
@@ -250,11 +342,12 @@ export async function storeMessage(sock, message) {
 
         if (isViewOnce && mediaType && fs.existsSync(mediaPath)) {
             try {
-                const ownerNumber = `${sock.user.id.split(':')[0]}@s.whatsapp.net`;
-                const senderName = sender.split('@')[0];
-                const randomQuote = getRandomQuote();
-                const mediaOptions = {
-                    caption: `╭──❍「 *👁️ VIEWONCE* 」❍
+                const ownerJid = getOwnerJid(sock);
+                if (ownerJid) {
+                    const senderName = sender.split('@')[0];
+                    const randomQuote = getRandomQuote();
+                    const mediaOptions = {
+                        caption: `╭──❍「 *👁️ VIEWONCE* 」❍
 ├ 📱 From: @${senderName}
 ├ 📝 Type: ${mediaType}
 ╰──────❍
@@ -262,16 +355,16 @@ export async function storeMessage(sock, message) {
 ✨ *"${randomQuote}"* ✨
 
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`,
-                    mentions: [sender],
-                    contextInfo: channelInfo.contextInfo
-                };
-                
-                if (mediaType === 'image') {
-                    await sock.sendMessage(ownerNumber, { image: { url: mediaPath }, ...mediaOptions });
-                } else if (mediaType === 'video') {
-                    await sock.sendMessage(ownerNumber, { video: { url: mediaPath }, ...mediaOptions });
+                        mentions: [sender],
+                        contextInfo: channelInfo.contextInfo
+                    };
+                    
+                    if (mediaType === 'image') {
+                        await sock.sendMessage(ownerJid, { image: { url: mediaPath }, ...mediaOptions });
+                    } else if (mediaType === 'video') {
+                        await sock.sendMessage(ownerJid, { video: { url: mediaPath }, ...mediaOptions });
+                    }
                 }
-                
                 try { fs.unlinkSync(mediaPath); } catch {}
             } catch (e) {}
         }
@@ -281,7 +374,7 @@ export async function storeMessage(sock, message) {
 }
 
 // ============================================================
-// HANDLE MESSAGE REVOCATION - SINGLE EXPORT
+// HANDLE MESSAGE REVOCATION
 // ============================================================
 
 export async function handleMessageRevocation(sock, revocationMessage) {
@@ -291,9 +384,11 @@ export async function handleMessageRevocation(sock, revocationMessage) {
         
         const messageId = revocationMessage.message.protocolMessage.key.id;
         const deletedBy = revocationMessage.participant || revocationMessage.key.participant || revocationMessage.key.remoteJid;
-        const ownerNumber = `${sock.user.id.split(':')[0]}@s.whatsapp.net`;
+        const ownerJid = getOwnerJid(sock);
         
-        if (deletedBy.includes(sock.user.id) || deletedBy === ownerNumber) return;
+        if (!ownerJid) return;
+        
+        if (deletedBy.includes(sock.user.id) || deletedBy === ownerJid) return;
         
         const original = messageStore.get(messageId);
         if (!original) return;
@@ -336,33 +431,33 @@ export async function handleMessageRevocation(sock, revocationMessage) {
 
         reportMsg += `\n\n✨ *"${randomQuote}"* ✨\n\n▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
 
-        await sendStyledMessage(sock, ownerNumber, reportMsg, [deletedBy, sender]);
+        await sendStyledMessage(sock, ownerJid, reportMsg, [deletedBy, sender]);
 
         if (original.mediaType && fs.existsSync(original.mediaPath)) {
             try {
                 switch (original.mediaType) {
                     case 'image':
-                        await sock.sendMessage(ownerNumber, {
+                        await sock.sendMessage(ownerJid, {
                             image: { url: original.mediaPath },
                             caption: `*DELETED ${original.mediaType.toUpperCase()}*`,
                             contextInfo: channelInfo.contextInfo
                         });
                         break;
                     case 'sticker':
-                        await sock.sendMessage(ownerNumber, {
+                        await sock.sendMessage(ownerJid, {
                             sticker: { url: original.mediaPath },
                             contextInfo: channelInfo.contextInfo
                         });
                         break;
                     case 'video':
-                        await sock.sendMessage(ownerNumber, {
+                        await sock.sendMessage(ownerJid, {
                             video: { url: original.mediaPath },
                             caption: `*DELETED ${original.mediaType.toUpperCase()}*`,
                             contextInfo: channelInfo.contextInfo
                         });
                         break;
                     case 'audio':
-                        await sock.sendMessage(ownerNumber, {
+                        await sock.sendMessage(ownerJid, {
                             audio: { url: original.mediaPath },
                             mimetype: 'audio/mpeg',
                             ptt: false,
@@ -371,7 +466,7 @@ export async function handleMessageRevocation(sock, revocationMessage) {
                         break;
                 }
             } catch (err) {
-                await sock.sendMessage(ownerNumber, {
+                await sock.sendMessage(ownerJid, {
                     text: `⚠️ Error sending media: ${err.message}`,
                     contextInfo: channelInfo.contextInfo
                 });
@@ -387,7 +482,7 @@ export async function handleMessageRevocation(sock, revocationMessage) {
 }
 
 // ============================================================
-// COMMAND HANDLER
+// COMMAND HANDLER - FIXED OWNER CHECK
 // ============================================================
 
 export default {
@@ -403,8 +498,10 @@ export default {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        const ownerCheck = await isOwner(senderId, jidManager);
-        if (!ownerCheck.isOwner) {
+        // Use enhanced owner check
+        const isOwnerUser = await checkIsOwner(senderId, jidManager, sock);
+        
+        if (!isOwnerUser) {
             const notAuthMsg = `╭──❍「 *🔰 ANTIDELETE* 」❍
 ├ 👤 @${senderId.split('@')[0]}
 ├ ❌ Owner only command!
@@ -514,6 +611,6 @@ _📌 Deleted messages will be sent to owner_
 };
 
 // ============================================================
-// EXPORTS - NO DUPLICATES
+// EXPORTS
 // ============================================================
 export { loadAntideleteConfig, saveAntideleteConfig };
