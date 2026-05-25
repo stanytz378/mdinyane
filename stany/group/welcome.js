@@ -20,7 +20,7 @@ if (!fs.existsSync(WELCOME_FILE)) fs.writeFileSync(WELCOME_FILE, JSON.stringify(
 // WELCOME FUNCTIONS
 // ============================================================
 
-async function getWelcomeSettings(chatId) {
+export async function getWelcomeSettings(chatId) {
     try {
         const data = JSON.parse(fs.readFileSync(WELCOME_FILE, 'utf8'));
         return data[chatId] || { enabled: false, message: null };
@@ -29,7 +29,7 @@ async function getWelcomeSettings(chatId) {
     }
 }
 
-async function setWelcomeSettings(chatId, enabled, message) {
+export async function setWelcomeSettings(chatId, enabled, message) {
     try {
         const data = JSON.parse(fs.readFileSync(WELCOME_FILE, 'utf8'));
         data[chatId] = { enabled, message, updatedAt: new Date().toISOString() };
