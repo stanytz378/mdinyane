@@ -1,26 +1,66 @@
 // stany/owner/autotyping.js
 // COMPLETE: Handler + Command for Auto Typing
+// Developed By STANY TZ
 
-import { config, updateConfig } from '../../stanycore/config.js';
+import fs from 'fs';
+import path from 'path';
+import moment from 'moment-timezone';
 import { channelInfo } from '../../stanytz/messageConfig.js';
-import isOwner from '../../stanymain/isOwner.js';
+
+const OWNER_FILE = path.join(process.cwd(), 'owner.json');
+const AUTOTYPING_FILE = path.join(process.cwd(), 'stanydata', 'autotyping.json');
+const DATA_DIR = path.join(process.cwd(), 'stanydata');
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Load or create config
+let autotypingConfig = {
+    enabled: false,
+    location: 'both',      // both, private, groups
+    duration: 30000,       // 30 seconds default
+    minSeconds: 15,
+    maxSeconds: 30
+};
+
+try {
+    if (fs.existsSync(AUTOTYPING_FILE)) {
+        const saved = JSON.parse(fs.readFileSync(AUTOTYPING_FILE, 'utf8'));
+        autotypingConfig = { ...autotypingConfig, ...saved };
+    } else {
+        fs.writeFileSync(AUTOTYPING_FILE, JSON.stringify(autotypingConfig, null, 2));
+    }
+} catch (e) {
+    console.error('Error loading autotyping config:', e);
+}
 
 // ============================================
-// HANDLER SECTION - Manages typing indicator
+// TYPING MANAGEMENT
 // ============================================
 
 let typingIntervals = new Map();
 let typingTimeouts = new Map();
 
 /**
- * Start auto typing indicator for a chat
- * @param {Object} sock - WhatsApp socket connection
- * @param {string} chatId - Chat ID
- * @param {number} duration - Duration in milliseconds (default: 30000)
- * @returns {Promise<Object|null>}
+ * Get random duration between min and max seconds
  */
-export async function handleAutoTyping(sock, chatId, duration = 30000) {
+function getRandomDuration() {
+    const min = autotypingConfig.minSeconds || 15;
+    const max = autotypingConfig.maxSeconds || 30;
+    const seconds = Math.floor(Math.random() * (max - min + 1) + min);
+    return seconds * 1000;
+}
+
+/**
+ * Start auto typing indicator for a chat
+ */
+export async function handleAutoTyping(sock, chatId, duration = null) {
     try {
+        // If no duration specified, use random between 15-30 seconds
+        if (duration === null) {
+            duration = getRandomDuration();
+        }
+        
         // Stop any existing typing first
         await stopTyping(sock, chatId);
         
@@ -52,7 +92,10 @@ export async function handleAutoTyping(sock, chatId, duration = 30000) {
         }
         typingTimeouts.get(chatId).add(timeout);
         
-        return { interval, timeout };
+        const durationSeconds = duration / 1000;
+        console.log(`[AutoTyping] Started typing for ${durationSeconds} seconds in ${chatId}`);
+        
+        return { interval, timeout, duration: durationSeconds };
     } catch (error) {
         console.error('[AutoTyping] Handler Error:', error.message);
         return null;
@@ -61,9 +104,6 @@ export async function handleAutoTyping(sock, chatId, duration = 30000) {
 
 /**
  * Stop typing indicator for a chat
- * @param {Object} sock - WhatsApp socket connection
- * @param {string} chatId - Chat ID
- * @returns {Promise<void>}
  */
 export async function stopTyping(sock, chatId) {
     try {
@@ -93,8 +133,7 @@ export async function stopTyping(sock, chatId) {
 }
 
 /**
- * Clean up all typing indicators (call on bot shutdown)
- * @param {Object} sock - WhatsApp socket connection
+ * Clean up all typing indicators
  */
 export async function cleanupAllTyping(sock) {
     const allChats = new Set([...typingIntervals.keys(), ...typingTimeouts.keys()]);
@@ -105,8 +144,6 @@ export async function cleanupAllTyping(sock) {
 
 /**
  * Check if typing is active for a chat
- * @param {string} chatId - Chat ID
- * @returns {boolean}
  */
 export function isTypingActive(chatId) {
     return typingIntervals.has(chatId) || typingTimeouts.has(chatId);
@@ -114,133 +151,370 @@ export function isTypingActive(chatId) {
 
 /**
  * Get all chats with active typing
- * @returns {Array}
  */
 export function getActiveTypingChats() {
     return Array.from(typingIntervals.keys());
 }
 
 // ============================================
-// COMMAND SECTION - User commands to control auto typing
+// SAVE CONFIG
 // ============================================
 
-/**
- * Send styled message with channel info
- */
-async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
+async function saveConfig() {
     try {
-        await sock.sendMessage(chatId, {
-            text: text,
-            contextInfo: channelInfo.contextInfo,
-            mentions: mentions
-        }, { quoted: quoted });
+        fs.writeFileSync(AUTOTYPING_FILE, JSON.stringify(autotypingConfig, null, 2));
+        return true;
     } catch (error) {
-        await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        console.error('Error saving autotyping config:', error);
+        return false;
     }
 }
 
-// Command export
+// ============================================
+// ENHANCED OWNER CHECK
+// ============================================
+
+function isUserOwner(senderId, sock) {
+    try {
+        if (!senderId) return false;
+        
+        // Clean the sender number
+        let senderNumber = senderId;
+        if (senderNumber.includes('@')) senderNumber = senderNumber.split('@')[0];
+        if (senderNumber.includes(':')) senderNumber = senderNumber.split(':')[0];
+        senderNumber = senderNumber.replace(/[^0-9]/g, '');
+        
+        if (!senderNumber || senderNumber.length < 5) return false;
+        
+        // Method 1: Check owner.json file
+        if (fs.existsSync(OWNER_FILE)) {
+            try {
+                const ownerData = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+                const ownerNumber = ownerData.OWNER_CLEAN_NUMBER || ownerData.OWNER_NUMBER;
+                if (ownerNumber && senderNumber === ownerNumber) {
+                    return true;
+                }
+            } catch (e) {}
+        }
+        
+        // Method 2: Check from connected device (sock)
+        if (sock && sock.user && sock.user.id) {
+            let botNumber = sock.user.id;
+            if (botNumber.includes('@')) botNumber = botNumber.split('@')[0];
+            if (botNumber.includes(':')) botNumber = botNumber.split(':')[0];
+            botNumber = botNumber.replace(/[^0-9]/g, '');
+            
+            if (senderNumber === botNumber) {
+                // Auto-save owner.json if not exists
+                if (!fs.existsSync(OWNER_FILE)) {
+                    const ownerData = {
+                        OWNER_JID: sock.user.id,
+                        OWNER_NUMBER: botNumber,
+                        OWNER_CLEAN_JID: sock.user.id,
+                        OWNER_CLEAN_NUMBER: botNumber,
+                        linkedAt: new Date().toISOString()
+                    };
+                    fs.writeFileSync(OWNER_FILE, JSON.stringify(ownerData, null, 2));
+                    console.log(`[OWNER] Auto-saved owner: ${botNumber}`);
+                }
+                return true;
+            }
+        }
+        
+        // Method 3: Check environment variable
+        const envOwner = process.env.OWNER_NUMBER;
+        if (envOwner) {
+            const cleanEnv = envOwner.replace(/[^0-9]/g, '');
+            if (senderNumber === cleanEnv) {
+                return true;
+            }
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Owner check error:', error);
+        return false;
+    }
+}
+
+// ============================================
+// CHECK IF SHOULD SHOW TYPING
+// ============================================
+
+function shouldShowTyping(chatId) {
+    const isGroup = chatId?.endsWith('@g.us');
+    const location = autotypingConfig.location;
+    
+    if (!autotypingConfig.enabled) return false;
+    if (location === 'both') return true;
+    if (location === 'private' && !isGroup) return true;
+    if (location === 'groups' && isGroup) return true;
+    return false;
+}
+
+// ============================================
+// AUTO TYPING TRIGGER - For main index.js
+// ============================================
+
+export async function triggerAutoTyping(sock, chatId, senderId) {
+    try {
+        // Check if feature is enabled
+        if (!shouldShowTyping(chatId)) return false;
+        
+        // Don't show typing for bot's own messages
+        if (sock.user && senderId) {
+            let botNumber = sock.user.id;
+            if (botNumber.includes('@')) botNumber = botNumber.split('@')[0];
+            if (senderId.includes(botNumber)) return false;
+        }
+        
+        // Avoid duplicate typing indicators
+        if (isTypingActive(chatId)) return false;
+        
+        // Start typing
+        await handleAutoTyping(sock, chatId);
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+// ============================================
+// SEND STYLED MESSAGE
+// ============================================
+
+async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
+    try {
+        await sock.sendMessage(chatId, { 
+            text: text, 
+            contextInfo: channelInfo.contextInfo, 
+            mentions: mentions 
+        }, { quoted: quoted });
+    } catch (error) {
+        try {
+            await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        } catch (e) {
+            console.error('Failed to send message:', e);
+        }
+    }
+}
+
+// ============================================
+// COMMAND EXPORT
+// ============================================
+
 export default {
     name: 'autotyping',
-    description: 'Enable/disable auto typing indicator',
+    description: 'Auto typing indicator (shows typing for 15-30 seconds on every message)',
     icon: '⌨️',
-    alias: ['autotype', 'at'],
+    alias: ['autotype', 'at', 'typing'],
     category: 'owner',
     ownerOnly: true,
     
-    async execute(sock, msg, args, currentPrefix, { isOwner, jidManager }) {
+    async execute(sock, msg, args, currentPrefix, options) {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        // Check if user is owner
-        const ownerCheck = await isOwner(senderId, jidManager);
-        if (!ownerCheck.isOwner) {
-            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍\n├ ❌ Owner only command!\n╰──────❍`, [senderId], msg);
+        // Check if sender is owner
+        const isOwnerUser = isUserOwner(senderId, sock);
+        
+        if (!isOwnerUser) {
+            const senderName = senderId.split('@')[0];
+            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ 👤 @${senderName}
+├ ❌ *Owner only command!*
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [senderId], msg);
             return;
         }
         
         const action = args[0]?.toLowerCase();
+        const now = moment().tz('Africa/Dar_es_Salaam');
+        const date = now.format('DD/MM/YYYY');
+        const time = now.format('HH:mm:ss');
+        const day = now.format('dddd');
         
-        // STATUS - Show current settings
+        // Get owner info
+        let ownerNumber = 'Not set';
+        try {
+            if (fs.existsSync(OWNER_FILE)) {
+                const ownerData = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+                ownerNumber = ownerData.OWNER_CLEAN_NUMBER || ownerData.OWNER_NUMBER || 'Not set';
+            } else if (sock.user) {
+                ownerNumber = sock.user.id.split('@')[0];
+            }
+        } catch (e) {}
+        
+        // Location display text
+        const locationText = {
+            both: '🌍 DM + Groups',
+            private: '💬 DM only',
+            groups: '👥 Groups only'
+        }[autotypingConfig.location] || '🌍 DM + Groups';
+        
+        // STATUS COMMAND
         if (!action || action === 'status') {
-            const locationText = config.autoTypingLocation === 'both' ? 'DM + Groups' : 
-                               config.autoTypingLocation === 'private' ? 'DM only' : 'Groups only';
+            const statusIcon = autotypingConfig.enabled ? '✅' : '❌';
+            const statusText = autotypingConfig.enabled ? 'ENABLED' : 'DISABLED';
+            
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
-├ 📝 *Status* : ${config.autoTyping ? '✅ ENABLED' : '❌ DISABLED'}
+├ 📝 *Status* : ${statusIcon} ${statusText}
 ├ 📍 *Location* : ${locationText}
+├ ⏱️ *Duration* : ${autotypingConfig.minSeconds}-${autotypingConfig.maxSeconds} seconds
+├ 👑 *Owner* : +${ownerNumber}
+├ 📅 *Date* : ${date}
+├ 📆 *Day* : ${day}
+├ ⏰ *Time* : ${time} EAT
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
-│ 🔧 ${currentPrefix}autotyping on - Enable auto typing
-│ 🔧 ${currentPrefix}autotyping off - Disable auto typing
+│ 🔧 ${currentPrefix}autotyping on - Enable
+│ 🔧 ${currentPrefix}autotyping off - Disable
 │ 🔧 ${currentPrefix}autotyping both - DM + Groups
 │ 🔧 ${currentPrefix}autotyping private - DM only
 │ 🔧 ${currentPrefix}autotyping groups - Groups only
-│ 🔧 ${currentPrefix}autotyping test - Test typing (10 sec)
-╰──────❍`, [], msg);
+│ 🔧 ${currentPrefix}autotyping duration <min> <max> - Set duration
+│ 🔧 ${currentPrefix}autotyping test - Test (random duration)
+│ 🔧 ${currentPrefix}autotyping stop - Stop current typing
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
             return;
         }
         
-        // TEST - Test the typing indicator
-        if (action === 'test') {
-            await handleAutoTyping(sock, chatId, 10000);
-            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
-├ 🧪 *TESTING TYPING INDICATOR*
-├ ⏱️ Duration: 10 seconds
-╰──────❍`, [], msg);
-            return;
-        }
-        
-        // ON - Enable auto typing
+        // ENABLE
         if (action === 'on') {
-            updateConfig({ autoTyping: true });
+            autotypingConfig.enabled = true;
+            await saveConfig();
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
-├ ✅ *AUTO TYPING ENABLED*
-├ 📍 Location: ${config.autoTypingLocation === 'both' ? 'DM + Groups' : config.autoTypingLocation === 'private' ? 'DM only' : 'Groups only'}
-╰──────❍`, [], msg);
-        } 
+├ ✅ *ENABLED*
+├ 📍 Location: ${locationText}
+├ ⏱️ Duration: ${autotypingConfig.minSeconds}-${autotypingConfig.maxSeconds} seconds
+├ 📝 Bot will show typing for every message
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[AUTOTYPING] Enabled by ${senderId.split('@')[0]}`);
+            return;
+        }
         
-        // OFF - Disable auto typing
-        else if (action === 'off') {
-            updateConfig({ autoTyping: false });
-            await stopTyping(sock, chatId);
+        // DISABLE
+        if (action === 'off') {
+            autotypingConfig.enabled = false;
+            await saveConfig();
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
-├ ❌ *AUTO TYPING DISABLED*
-╰──────❍`, [], msg);
-        } 
+├ ❌ *DISABLED*
+├ 📝 Bot will not show typing indicator
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[AUTOTYPING] Disabled by ${senderId.split('@')[0]}`);
+            return;
+        }
         
-        // BOTH - DM and Groups
-        else if (action === 'both') {
-            updateConfig({ autoTypingLocation: 'both' });
+        // BOTH LOCATION
+        if (action === 'both') {
+            autotypingConfig.location = 'both';
+            await saveConfig();
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
 ├ 🌍 *Location: BOTH (DM + Groups)*
-├ ${config.autoTyping ? '✅ Auto typing is enabled' : '⚠️ Auto typing is disabled, use .autotyping on to enable'}
-╰──────❍`, [], msg);
-        } 
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
         
-        // PRIVATE - DM only
-        else if (action === 'private') {
-            updateConfig({ autoTypingLocation: 'private' });
+        // PRIVATE ONLY
+        if (action === 'private') {
+            autotypingConfig.location = 'private';
+            await saveConfig();
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
 ├ 💬 *Location: PRIVATE (DM ONLY)*
-├ ${config.autoTyping ? '✅ Auto typing is enabled' : '⚠️ Auto typing is disabled, use .autotyping on to enable'}
-╰──────❍`, [], msg);
-        } 
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
         
-        // GROUPS - Groups only
-        else if (action === 'groups') {
-            updateConfig({ autoTypingLocation: 'groups' });
+        // GROUPS ONLY
+        if (action === 'groups') {
+            autotypingConfig.location = 'groups';
+            await saveConfig();
             await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
 ├ 👥 *Location: GROUPS ONLY*
-├ ${config.autoTyping ? '✅ Auto typing is enabled' : '⚠️ Auto typing is disabled, use .autotyping on to enable'}
-╰──────❍`, [], msg);
-        } 
-        
-        // Invalid command
-        else {
-            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
-├ ❌ *Invalid command: "${action}"*
-├ 📋 Use: ${currentPrefix}autotyping status
-╰──────❍`, [], msg);
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
         }
+        
+        // SET DURATION
+        if (action === 'duration') {
+            const minVal = parseInt(args[1]);
+            const maxVal = parseInt(args[2]);
+            
+            if (isNaN(minVal) || isNaN(maxVal) || minVal < 1 || maxVal < minVal) {
+                await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ ❌ *Invalid duration*
+├ 📝 *Use* : ${currentPrefix}autotyping duration 15 30
+├ 📝 Min: 1-60 seconds, Max: > Min
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+                return;
+            }
+            
+            autotypingConfig.minSeconds = minVal;
+            autotypingConfig.maxSeconds = maxVal;
+            await saveConfig();
+            
+            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ ⏱️ *Duration Updated*
+├ 📝 Min: ${minVal} seconds
+├ 📝 Max: ${maxVal} seconds
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
+        
+        // TEST COMMAND
+        if (action === 'test') {
+            const duration = getRandomDuration();
+            const durationSeconds = duration / 1000;
+            await handleAutoTyping(sock, chatId, duration);
+            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ 🧪 *TESTING TYPING INDICATOR*
+├ ⏱️ Duration: ${durationSeconds} seconds
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
+        
+        // STOP COMMAND
+        if (action === 'stop') {
+            await stopTyping(sock, chatId);
+            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ ⏹️ *TYPING STOPPED*
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
+        
+        // RESET COMMAND
+        if (action === 'reset') {
+            autotypingConfig = {
+                enabled: false,
+                location: 'both',
+                duration: 30000,
+                minSeconds: 15,
+                maxSeconds: 30
+            };
+            await saveConfig();
+            await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ 🔄 *RESET TO DEFAULT*
+├ 📝 Enabled: false, Location: both, Duration: 15-30 seconds
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            return;
+        }
+        
+        // INVALID ACTION
+        await sendStyledMessage(sock, chatId, `╭──❍「 *⌨️ AUTO TYPING* 」❍
+├ ❌ *Invalid action* : "${action}"
+├ 📝 *Valid* : on, off, status, both, private, groups, duration, test, stop, reset
+╰──────❍
+▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
     }
 };
