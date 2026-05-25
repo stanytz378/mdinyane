@@ -112,8 +112,8 @@ import { handleTagDetection } from './stany/group/antitag.js';
 import { handleAntiSpam, invalidateGroupCache } from './stany/group/antispam.js';
 import { handleStatusMention } from './stany/group/antistatusmention.js';
 import { handleMutedMessages, isUserMuted, removeMutedUser } from './stany/group/mute.js';
-import { getWelcomeSettings, setWelcomeSettings } from './stany/group/welcome.js';
-import { getGoodbyeSettings, setGoodbyeSettings } from './stany/group/goodbye.js';
+import { getWelcomeSettings, setWelcomeSettings, sendWelcomeMessage } from './stany/group/welcome.js';
+import { getGoodbyeSettings, setGoodbyeSettings, sendGoodbyeMessage } from './stany/group/goodbye.js';
 
 // STANY MEDIA (Handlers)
 import { handleAntiMedia } from './stanymedia/antimedia.js';
@@ -147,15 +147,9 @@ const __dirname = dirname(__filename);
 
 const isHeroku = process.env.HEROKU === 'true' || process.env.DYNO !== undefined || process.env.HEROKU_APP_NAME !== undefined;
 const isPanel = process.env.PANEL === 'true' || fs.existsSync('/home/container');
-const isRender = process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID !== undefined;
-const isReplit = process.env.REPLIT === 'true' || process.env.REPL_ID !== undefined;
-const isVercel = process.env.VERCEL === 'true' || process.env.VERCEL_ENV !== undefined;
 
 function detectPlatform() {
     if (isHeroku) return 'Heroku';
-    if (isRender) return 'Render';
-    if (isReplit) return 'Replit';
-    if (isVercel) return 'Vercel';
     if (isPanel) return 'Panel';
     return 'Local/VPS';
 }
@@ -177,9 +171,9 @@ const BLOCKED_USERS_FILE = './blocked_users.json';
 const WELCOME_DATA_FILE = './data/welcome_data.json';
 const AUTO_CONNECT_ON_LINK = true;
 const AUTO_CONNECT_ON_START = true;
-const RATE_LIMIT_ENABLED = false;  // DISABLED - No rate limits
-const MIN_COMMAND_DELAY = 0;        // No delay
-const STICKER_DELAY = 0;            // No delay
+const RATE_LIMIT_ENABLED = false;
+const MIN_COMMAND_DELAY = 0;
+const STICKER_DELAY = 0;
 const AUTO_JOIN_ENABLED = true;
 const AUTO_JOIN_DELAY = 5000;
 const SEND_WELCOME_MESSAGE = true;
@@ -291,16 +285,11 @@ class RateLimitProtection {
         setInterval(() => this.cleanup(), 60000);
     }
     canSendCommand(chatId, userId, command) {
-        // RATE LIMIT FULLY DISABLED - Always allowed
         return { allowed: true };
     }
-    async waitForSticker(chatId) {
-        // No delay for stickers
-        return;
-    }
+    async waitForSticker(chatId) { return; }
     delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
     cleanup() {
-        // Cleanup old entries
         const now = Date.now();
         const fiveMinutes = 5 * 60 * 1000;
         for (const [key, timestamp] of this.userCooldowns.entries()) { if (now - timestamp > fiveMinutes) this.userCooldowns.delete(key); }
@@ -378,7 +367,7 @@ function updateTerminalHeader() {
 ╔══════════════════════════════════════════════════════════════════════╗
 ║   🀄️ ${chalk.bold(`${BOT_NAME.toUpperCase()} v${VERSION}`)} on ${chalk.yellow(currentPlatform)}
 ║   💬 Prefix  : ${prefixDisplay}
-║   🔧 Rate Limit: ${chalk.red('DISABLED')} - Owner Mode
+║   🔧 Rate Limit: ${chalk.red('DISABLED')}
 ║   🔗 Auto-Connect on Link: ${AUTO_CONNECT_ON_LINK ? '✅' : '❌'}
 ║   🔐 Login Methods: Pairing Code | Session ID
 ╚══════════════════════════════════════════════════════════════════════╝
@@ -455,7 +444,7 @@ async function authenticateWithSessionId(sessionId) {
 }
 
 // ============================================================
-// JID MANAGER & OWNER - FIXED
+// JID MANAGER & OWNER
 // ============================================================
 
 let OWNER_NUMBER = null, OWNER_JID = null, OWNER_CLEAN_JID = null, OWNER_CLEAN_NUMBER = null, OWNER_LID = null;
@@ -515,30 +504,22 @@ class JidManager {
     }
     isOwner(msg) {
         if (!msg || !msg.key) return false;
-        
-        // Check fromMe flag
         if (msg.key.fromMe) return true;
-        
         const senderJid = msg.key.participant || msg.key.remoteJid;
         const cleaned = this.cleanJid(senderJid);
-        
         if (!this.owner || !this.owner.cleanNumber) {
             this.loadOwnerData();
         }
-        
         if (this.owner && this.owner.cleanNumber) {
             if (cleaned.cleanNumber === this.owner.cleanNumber) return true;
             if (senderJid === this.owner.rawJid || senderJid === this.owner.cleanJid) return true;
         }
-        
         if (this.ownerJids.has(cleaned.cleanJid) || this.ownerJids.has(senderJid)) return true;
-        
         if (cleaned.isLid) {
             const lidNumber = cleaned.cleanNumber;
             if (this.ownerLids.has(senderJid) || this.ownerLids.has(lidNumber)) return true;
             if (OWNER_LID && (senderJid === OWNER_LID || lidNumber === OWNER_LID.split('@')[0])) return true;
         }
-        
         return false;
     }
     setNewOwner(newJid, isAutoLinked = false) {
@@ -594,6 +575,66 @@ function forceOwnerFromSession() {
         UltraCleanLogger.warning(`Could not force owner from session: ${error.message}`);
     }
     return false;
+}
+
+// ============================================================
+// AUTO FEATURES TRIGGERS
+// ============================================================
+
+let autoTypingEnabled = false;
+let autoTypingLocation = 'both';
+
+async function triggerAutoTyping(sock, chatId, senderId) {
+    try {
+        if (!autoTypingEnabled) return false;
+        const isGroup = chatId?.endsWith('@g.us');
+        if (autoTypingLocation === 'private' && isGroup) return false;
+        if (autoTypingLocation === 'groups' && !isGroup) return false;
+        if (sock.user && senderId && senderId.includes(sock.user.id?.split('@')[0])) return false;
+        
+        await sock.sendPresenceUpdate('composing', chatId);
+        const duration = Math.floor(Math.random() * (30000 - 15000 + 1) + 15000);
+        setTimeout(async () => {
+            try { await sock.sendPresenceUpdate('paused', chatId); } catch(e) {}
+        }, duration);
+        return true;
+    } catch(e) { return false; }
+}
+
+let autoRecordingEnabled = false;
+let autoRecordingLocation = 'both';
+
+async function triggerAutoRecording(sock, chatId, senderId) {
+    try {
+        if (!autoRecordingEnabled) return false;
+        const isGroup = chatId?.endsWith('@g.us');
+        if (autoRecordingLocation === 'private' && isGroup) return false;
+        if (autoRecordingLocation === 'groups' && !isGroup) return false;
+        if (sock.user && senderId && senderId.includes(sock.user.id?.split('@')[0])) return false;
+        
+        await sock.sendPresenceUpdate('recording', chatId);
+        const duration = Math.floor(Math.random() * (30000 - 15000 + 1) + 15000);
+        setTimeout(async () => {
+            try { await sock.sendPresenceUpdate('paused', chatId); } catch(e) {}
+        }, duration);
+        return true;
+    } catch(e) { return false; }
+}
+
+let autoReadEnabled = false;
+let autoReadGroups = true;
+let autoReadPrivate = true;
+
+async function triggerAutoRead(sock, message) {
+    try {
+        if (!autoReadEnabled) return;
+        const chatId = message.key.remoteJid;
+        if (!chatId || chatId === 'status@broadcast') return;
+        const isGroup = chatId.endsWith('@g.us');
+        if (isGroup && !autoReadGroups) return;
+        if (!isGroup && !autoReadPrivate) return;
+        await sock.readMessages([message.key]);
+    } catch(e) {}
 }
 
 // ============================================================
@@ -967,7 +1008,7 @@ function checkBotMode(msg, commandName) {
         switch (BOT_MODE) {
             case 'public': return true; case 'private': return false; case 'silent': return false;
             case 'group-only': return chatJid.includes('@g.us');
-            case 'maintenance': return ['ping', 'status', 'uptime', 'help', 'ownerinfo'].includes(commandName);
+            case 'maintenance': return ['ping', 'status', 'uptime', 'help'].includes(commandName);
             default: return true;
         }
     } catch { return true; }
@@ -1034,108 +1075,6 @@ async function loadCommandsFromFolder(folderPath, category = 'general') {
 }
 
 // ============================================================
-// OWNER INFO COMMAND (Built-in)
-// ============================================================
-
-async function sendOwnerInfo(sock, msg, args, prefix) {
-    const chatId = msg.key.remoteJid;
-    const ownerInfo = jidManager.getOwnerInfo();
-    const isSenderOwner = jidManager.isOwner(msg);
-    
-    let response = `👑 *OWNER INFORMATION*\n\n`;
-    response += `📱 Owner Number: ${ownerInfo.ownerNumber ? `+${ownerInfo.ownerNumber}` : 'Not set'}\n`;
-    response += `🔗 Owner JID: ${ownerInfo.ownerJid || 'Not set'}\n`;
-    response += `✅ You are Owner: ${isSenderOwner ? 'YES 👑' : 'NO ❌'}\n`;
-    response += `🖥️ Platform: ${currentPlatform}\n`;
-    response += `🤖 Bot Name: ${BOT_NAME} v${VERSION}\n`;
-    response += `⚡ Rate Limit: DISABLED\n`;
-    
-    await sock.sendMessage(chatId, { text: response }, { quoted: msg });
-}
-
-// ============================================================
-// WELCOME & GOODBYE MESSAGES
-// ============================================================
-
-async function sendWelcomeMessage(sock, groupId, participants) {
-    try {
-        const settings = await getWelcomeSettings(groupId);
-        if (!settings.enabled) return;
-        
-        const now = moment().tz('Africa/Dar_es_Salaam');
-        const time = now.format('HH:mm:ss');
-        const date = now.format('DD/MM/YYYY');
-        
-        for (const participant of participants) {
-            const participantId = typeof participant === 'string' ? participant : participant.id;
-            const participantName = participantId.split('@')[0];
-            
-            let message = settings.message || '🎉 Welcome {name} to the group!';
-            message = message.replace(/{name}/g, participantName);
-            message = message.replace(/{time}/g, time);
-            message = message.replace(/{date}/g, date);
-            
-            const welcomeMsg = `╭──❍「 *👋 WELCOME* 」❍
-├ 👤 *${message}*
-├ 📅 *Date* : ${date}
-├ ⏰ *Time* : ${time} EAT
-╰──────❍
-
-✨ *"Enjoy your stay!"* ✨
-
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            
-            await sock.sendMessage(groupId, {
-                text: welcomeMsg,
-                mentions: [participantId],
-                contextInfo: channelInfo.contextInfo
-            });
-        }
-    } catch (error) {
-        UltraCleanLogger.error(`Welcome message error: ${error.message}`);
-    }
-}
-
-async function sendGoodbyeMessage(sock, groupId, participants) {
-    try {
-        const settings = await getGoodbyeSettings(groupId);
-        if (!settings.enabled) return;
-        
-        const now = moment().tz('Africa/Dar_es_Salaam');
-        const time = now.format('HH:mm:ss');
-        const date = now.format('DD/MM/YYYY');
-        
-        for (const participant of participants) {
-            const participantId = typeof participant === 'string' ? participant : participant.id;
-            const participantName = participantId.split('@')[0];
-            
-            let message = settings.message || '👋 Goodbye {name}! We\'ll miss you!';
-            message = message.replace(/{name}/g, participantName);
-            message = message.replace(/{time}/g, time);
-            message = message.replace(/{date}/g, date);
-            
-            const goodbyeMsg = `╭──❍「 *👋 GOODBYE* 」❍
-├ 👤 *${message}*
-├ 📅 *Date* : ${date}
-├ ⏰ *Time* : ${time} EAT
-╰──────❍
-
-✨ *"Take care!"* ✨
-
-▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
-            
-            await sock.sendMessage(groupId, {
-                text: goodbyeMsg,
-                mentions: [participantId],
-                contextInfo: channelInfo.contextInfo
-            });
-        }
-    } catch (error) {
-        UltraCleanLogger.error(`Goodbye message error: ${error.message}`);
-    }
-}
-
-// ============================================================
 // BOT CONNECTION
 // ============================================================
 
@@ -1143,14 +1082,12 @@ async function startBot(loginMode = 'pair', loginData = null) {
     try {
         UltraCleanLogger.info(`🚀 Initializing WhatsApp connection on ${currentPlatform}...`);
         
-        // Force owner from session before starting
         forceOwnerFromSession();
         
         if (loginMode === 'session' && loginData) {
             try { 
                 await authenticateWithSessionId(loginData); 
                 UltraCleanLogger.success('✅ Session loaded successfully!');
-                // Force owner again after session load
                 forceOwnerFromSession();
             } catch (error) { 
                 UltraCleanLogger.error(`Session loading failed: ${error.message}`);
@@ -1324,6 +1261,10 @@ async function startBot(loginMode = 'pair', loginData = null) {
             const senderJid = msg.key.participant || chatId;
             const textMsg = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             
+            await triggerAutoRead(sock, msg);
+            await triggerAutoTyping(sock, chatId, senderJid);
+            await triggerAutoRecording(sock, chatId, senderJid);
+            
             try {
                 const bannedData = JSON.parse(fs.readFileSync('./stanydata/banned_users.json', 'utf8'));
                 if (bannedData.users?.some(u => u.id === senderJid.split('@')[0])) return;
@@ -1389,7 +1330,6 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
     OWNER_JID = sock.user.id; 
     OWNER_NUMBER = OWNER_JID.split('@')[0];
     
-    // FORCE SET OWNER FROM CONNECTED DEVICE
     const forceResult = jidManager.setNewOwner(OWNER_JID, true);
     UltraCleanLogger.success(`👑 Owner forced set to: ${OWNER_JID}`);
     
@@ -1667,7 +1607,6 @@ async function handleIncomingMessage(sock, msg) {
         
         if (!commandName) return;
         
-        // No rate limit check - always allowed
         const prefixDisplay = usedPrefix || (isPrefixlessMode ? '' : prefixes[0]);
         UltraCleanLogger.command(`${chatId.split('@')[0]} → ${prefixDisplay}${commandName}`);
         
@@ -1679,7 +1618,6 @@ async function handleIncomingMessage(sock, msg) {
         
         if (commandName === 'connect' || commandName === 'link') { const cleaned = jidManager.cleanJid(senderJid); await handleConnectCommand(sock, msg, args, cleaned); return; }
         
-        // Owner info command built-in
         if (commandName === 'ownerinfo' || commandName === 'checkowner') {
             await sendOwnerInfo(sock, msg, args, usedPrefix || prefixes[0]);
             return;
@@ -1720,6 +1658,23 @@ async function handleIncomingMessage(sock, msg) {
     } catch (error) { UltraCleanLogger.error(`Message handler error: ${error.message}`); }
 }
 
+async function sendOwnerInfo(sock, msg, args, prefix) {
+    const chatId = msg.key.remoteJid;
+    const ownerInfo = jidManager.getOwnerInfo();
+    const isSenderOwner = jidManager.isOwner(msg);
+    
+    let response = `╭──❍「 👑 OWNER INFORMATION 」❍
+├ 📱 *Owner* : +${ownerInfo.ownerNumber || 'Not set'}
+├ 👑 *You are Owner* : ${isSenderOwner ? '✅ YES' : '❌ NO'}
+├ 🖥️ *Platform* : ${currentPlatform}
+├ 🤖 *Bot* : ${BOT_NAME} v${VERSION}
+├ ⚡ *Rate Limit* : DISABLED
+╰──────❍
+▰▰▰ ©️ MDINYANE WITH CONDOM ▰▰▰`;
+    
+    await sock.sendMessage(chatId, { text: response }, { quoted: msg });
+}
+
 async function handleDefaultCommands(commandName, sock, msg, args, currentPrefix) {
     const chatId = msg.key.remoteJid;
     const isOwnerUser = jidManager.isOwner(msg);
@@ -1741,7 +1696,7 @@ async function handleDefaultCommands(commandName, sock, msg, args, currentPrefix
 }
 
 // ============================================================
-// LOGIN MANAGER (For Panel/Local only)
+// LOGIN MANAGER
 // ============================================================
 
 class LoginManager {
@@ -1786,7 +1741,7 @@ class LoginManager {
 }
 
 // ============================================================
-// HEALTH CHECK SERVER (For Panel)
+// HEALTH CHECK SERVER
 // ============================================================
 
 if (isPanel) {
@@ -1817,7 +1772,29 @@ if (isPanel) {
 }
 
 // ============================================================
-// MAIN FUNCTION - UPDATED
+// LOAD AUTO FEATURES CONFIG
+// ============================================================
+
+function loadAutoFeaturesConfig() {
+    try {
+        const configPath = './stanydata/autofeatures.json';
+        if (fs.existsSync(configPath)) {
+            const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            autoTypingEnabled = data.autoTyping || false;
+            autoTypingLocation = data.autoTypingLocation || 'both';
+            autoRecordingEnabled = data.autoRecording || false;
+            autoRecordingLocation = data.autoRecordingLocation || 'both';
+            autoReadEnabled = data.autoRead || false;
+            autoReadGroups = data.autoReadGroups !== undefined ? data.autoReadGroups : true;
+            autoReadPrivate = data.autoReadPrivate !== undefined ? data.autoReadPrivate : true;
+        }
+    } catch (e) {}
+}
+
+loadAutoFeaturesConfig();
+
+// ============================================================
+// MAIN FUNCTION
 // ============================================================
 
 async function main() {
@@ -1826,7 +1803,6 @@ async function main() {
         UltraCleanLogger.info(`⚡ Rate Limit: ${RATE_LIMIT_ENABLED ? 'ENABLED' : 'DISABLED'}`);
         
         if (isHeroku) {
-            // HEROKU MODE: Automatic session loading - NO MENU
             const sessionId = process.env.SESSION_ID;
             
             if (!sessionId || sessionId.trim() === '') {
@@ -1842,17 +1818,13 @@ async function main() {
             try {
                 await authenticateWithSessionId(sessionId.trim());
                 UltraCleanLogger.success('✅ Session loaded successfully!');
-                
-                // Force owner after session load
                 forceOwnerFromSession();
-                
                 await startBot('session', sessionId.trim());
             } catch (error) {
                 UltraCleanLogger.error(`❌ Failed to load session: ${error.message}`);
                 process.exit(1);
             }
         } else {
-            // PANEL / LOCAL MODE: Show menu
             UltraCleanLogger.info('🖥️ Panel/Local mode detected - Showing login menu...');
             const loginManager = new LoginManager();
             const loginInfo = await loginManager.selectMode();
