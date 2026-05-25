@@ -9,9 +9,123 @@
  *                                                                           *
  *****************************************************************************/
 
-import { config, updateConfig } from '../../stanycore/config.js';
+import fs from 'fs';
+import path from 'path';
+import moment from 'moment-timezone';
 import { channelInfo } from '../../stanytz/messageConfig.js';
-import isOwner from '../../stanymain/isOwner.js';
+
+const OWNER_FILE = path.join(process.cwd(), 'owner.json');
+const PREFIX_CONFIG_FILE = path.join(process.cwd(), 'prefix_config.json');
+const DATA_DIR = path.join(process.cwd(), 'stanydata');
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Global prefix config
+let prefixConfig = {
+    prefixes: ['.'],
+    prefixless: false
+};
+
+// Load saved prefix config
+try {
+    if (fs.existsSync(PREFIX_CONFIG_FILE)) {
+        const saved = JSON.parse(fs.readFileSync(PREFIX_CONFIG_FILE, 'utf8'));
+        prefixConfig = { ...prefixConfig, ...saved };
+    } else {
+        fs.writeFileSync(PREFIX_CONFIG_FILE, JSON.stringify(prefixConfig, null, 2));
+    }
+} catch (e) {
+    console.error('Error loading prefix config:', e);
+}
+
+// Export for other modules
+export const getPrefixes = () => prefixConfig.prefixes;
+export const isPrefixless = () => prefixConfig.prefixless;
+export const getCurrentPrefix = () => prefixConfig.prefixes[0] || '.';
+
+// Function to update prefix config
+export function updatePrefixConfig(newConfig) {
+    try {
+        prefixConfig = { ...prefixConfig, ...newConfig };
+        fs.writeFileSync(PREFIX_CONFIG_FILE, JSON.stringify(prefixConfig, null, 2));
+        return true;
+    } catch (error) {
+        console.error('Error saving prefix config:', error);
+        return false;
+    }
+}
+
+// ============================================================
+// ENHANCED OWNER CHECK
+// ============================================================
+
+function isUserOwner(senderId, sock) {
+    try {
+        if (!senderId) return false;
+        
+        // Clean the sender number
+        let senderNumber = senderId;
+        if (senderNumber.includes('@')) senderNumber = senderNumber.split('@')[0];
+        if (senderNumber.includes(':')) senderNumber = senderNumber.split(':')[0];
+        senderNumber = senderNumber.replace(/[^0-9]/g, '');
+        
+        if (!senderNumber || senderNumber.length < 5) return false;
+        
+        // Method 1: Check owner.json file
+        if (fs.existsSync(OWNER_FILE)) {
+            try {
+                const ownerData = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+                const ownerNumber = ownerData.OWNER_CLEAN_NUMBER || ownerData.OWNER_NUMBER;
+                if (ownerNumber && senderNumber === ownerNumber) {
+                    return true;
+                }
+            } catch (e) {}
+        }
+        
+        // Method 2: Check from connected device (sock)
+        if (sock && sock.user && sock.user.id) {
+            let botNumber = sock.user.id;
+            if (botNumber.includes('@')) botNumber = botNumber.split('@')[0];
+            if (botNumber.includes(':')) botNumber = botNumber.split(':')[0];
+            botNumber = botNumber.replace(/[^0-9]/g, '');
+            
+            if (senderNumber === botNumber) {
+                // Auto-save owner.json if not exists
+                if (!fs.existsSync(OWNER_FILE)) {
+                    const ownerData = {
+                        OWNER_JID: sock.user.id,
+                        OWNER_NUMBER: botNumber,
+                        OWNER_CLEAN_JID: sock.user.id,
+                        OWNER_CLEAN_NUMBER: botNumber,
+                        linkedAt: new Date().toISOString()
+                    };
+                    fs.writeFileSync(OWNER_FILE, JSON.stringify(ownerData, null, 2));
+                    console.log(`[OWNER] Auto-saved owner: ${botNumber}`);
+                }
+                return true;
+            }
+        }
+        
+        // Method 3: Check environment variable
+        const envOwner = process.env.OWNER_NUMBER;
+        if (envOwner) {
+            const cleanEnv = envOwner.replace(/[^0-9]/g, '');
+            if (senderNumber === cleanEnv) {
+                return true;
+            }
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Owner check error:', error);
+        return false;
+    }
+}
+
+// ============================================================
+// SEND STYLED MESSAGE
+// ============================================================
 
 async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = null) {
     try {
@@ -21,39 +135,62 @@ async function sendStyledMessage(sock, chatId, text, mentions = [], quoted = nul
             mentions: mentions
         }, { quoted: quoted });
     } catch (error) {
-        await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        try {
+            await sock.sendMessage(chatId, { text: text, mentions: mentions }, { quoted: quoted });
+        } catch (e) {
+            console.error('Failed to send message:', e);
+        }
     }
 }
+
+// ============================================================
+// COMMAND EXPORT
+// ============================================================
 
 export default {
     name: 'prefix',
     description: 'Manage bot prefixes (multiple prefixes supported)',
     icon: '🔧',
-    alias: ['setprefix', 'changeprefix', 'multiprefix'],
+    alias: ['setprefix', 'changeprefix', 'multiprefix', 'prefixes'],
     category: 'owner',
     ownerOnly: true,
     
-    async execute(sock, msg, args, currentPrefix, { isOwner, jidManager }) {
+    async execute(sock, msg, args, currentPrefix, options) {
         const chatId = msg.key.remoteJid;
         const senderId = msg.key.participant || chatId;
         
-        const ownerCheck = await isOwner(senderId, jidManager);
-        if (!ownerCheck.isOwner) {
+        // Check if sender is owner
+        const isOwnerUser = isUserOwner(senderId, sock);
+        
+        if (!isOwnerUser) {
+            const senderName = senderId.split('@')[0];
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔧 PREFIX* 」❍
-├ 👤 *User* : @${senderId.split('@')[0]}
-├ ❌ *Error* : Owner only command!
+├ 👤 @${senderName}
+├ ❌ *Owner only command!*
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [senderId], msg);
             return;
         }
         
         const action = args[0]?.toLowerCase();
-        const currentPrefixes = config.prefixes || ['.'];
-        const prefixlessStatus = config.prefixless ? '✅ ENABLED' : '❌ DISABLED';
+        const now = moment().tz('Africa/Dar_es_Salaam');
+        const date = now.format('DD/MM/YYYY');
+        const time = now.format('HH:mm:ss');
+        const day = now.format('dddd');
         
-        const now = new Date();
-        const date = now.toLocaleDateString('en-GB');
-        const time = now.toLocaleTimeString('en-GB');
+        const currentPrefixes = prefixConfig.prefixes;
+        const prefixlessStatus = prefixConfig.prefixless;
+        
+        // Get owner info
+        let ownerNumber = 'Not set';
+        try {
+            if (fs.existsSync(OWNER_FILE)) {
+                const ownerData = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+                ownerNumber = ownerData.OWNER_CLEAN_NUMBER || ownerData.OWNER_NUMBER || 'Not set';
+            } else if (sock.user) {
+                ownerNumber = sock.user.id.split('@')[0];
+            }
+        } catch (e) {}
         
         // ============================================================
         // SHOW STATUS (default)
@@ -61,17 +198,19 @@ export default {
         if (!action || action === 'status') {
             const prefixList = currentPrefixes.map(p => {
                 if (p === ' ') return '[SPACE]';
-                if (p === '\\n') return '[NEWLINE]';
-                if (p === '\\t') return '[TAB]';
+                if (p === '\n') return '[NEWLINE]';
+                if (p === '\t') return '[TAB]';
                 return p;
             }).join(', ');
             
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔧 PREFIX SETTINGS* 」❍
 ├ 📝 *Active Prefixes* : ${currentPrefixes.length}
 ├ 🔧 *Prefixes* : ${prefixList}
-├ 🔓 *Prefixless Mode* : ${prefixlessStatus}
+├ 🔓 *Prefixless Mode* : ${prefixlessStatus ? '✅ ENABLED' : '❌ DISABLED'}
+├ 👑 *Owner* : +${ownerNumber}
 ├ 📅 *Date* : ${date}
-├ ⏰ *Time* : ${time}
+├ 📆 *Day* : ${day}
+├ ⏰ *Time* : ${time} EAT
 ╰─┬────❍
 ╭─┴─❍「 *📋 COMMANDS* 」❍
 │ 🔧 ${currentPrefix}prefix add <symbol> - Add prefix
@@ -125,7 +264,7 @@ export default {
             }
             
             prefixes.push(newPrefix);
-            updateConfig({ prefixes: prefixes, prefixless: false });
+            updatePrefixConfig({ prefixes: prefixes, prefixless: false });
             
             const displayPrefix = newPrefix === ' ' ? '[SPACE]' : newPrefix === '\t' ? '[TAB]' : newPrefix === '\n' ? '[NEWLINE]' : newPrefix;
             
@@ -135,6 +274,7 @@ export default {
 ├ 📝 *Active Prefixes* : ${prefixes.join(', ')}
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[PREFIX] Added "${newPrefix}" by ${senderId.split('@')[0]}`);
             return;
         }
         
@@ -177,7 +317,7 @@ export default {
             }
             
             prefixes = prefixes.filter(p => p !== removePrefix);
-            updateConfig({ prefixes: prefixes });
+            updatePrefixConfig({ prefixes: prefixes });
             
             const displayPrefix = removePrefix === ' ' ? '[SPACE]' : removePrefix === '\t' ? '[TAB]' : removePrefix === '\n' ? '[NEWLINE]' : removePrefix;
             
@@ -187,6 +327,7 @@ export default {
 ├ 📝 *Active Prefixes* : ${prefixes.join(', ')}
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[PREFIX] Removed "${removePrefix}" by ${senderId.split('@')[0]}`);
             return;
         }
         
@@ -204,8 +345,9 @@ export default {
                 listText += `│ ${i + 1}. ${display}\n`;
             }
             listText += `├ 📊 *Total* : ${currentPrefixes.length}\n`;
+            listText += `├ 👑 *Owner* : +${ownerNumber}\n`;
             listText += `├ 📅 *Date* : ${date}\n`;
-            listText += `├ ⏰ *Time* : ${time}\n`;
+            listText += `├ ⏰ *Time* : ${time} EAT\n`;
             listText += `╰──────❍\n`;
             listText += `▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`;
             
@@ -230,7 +372,7 @@ export default {
         // ENABLE PREFIXLESS MODE
         // ============================================================
         if (action === 'none' || action === 'off' || action === 'prefixless') {
-            if (config.prefixless) {
+            if (prefixConfig.prefixless) {
                 await sendStyledMessage(sock, chatId, `╭──❍「 *🔧 PREFIX* 」❍
 ├ ⚠️ *Prefixless Mode* : Already ENABLED
 ├ 📝 *Commands work without prefix*
@@ -239,7 +381,7 @@ export default {
                 return;
             }
             
-            updateConfig({ prefixless: true });
+            updatePrefixConfig({ prefixless: true });
             
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔧 PREFIX* 」❍
 ├ ✅ *Prefixless Mode* : ENABLED
@@ -247,6 +389,7 @@ export default {
 ├ 📝 *Example* : Type "menu" instead of ".menu"
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[PREFIX] Prefixless mode enabled by ${senderId.split('@')[0]}`);
             return;
         }
         
@@ -254,7 +397,7 @@ export default {
         // RESET TO DEFAULT
         // ============================================================
         if (action === 'reset' || action === 'default') {
-            updateConfig({ prefixes: ['.'], prefixless: false });
+            updatePrefixConfig({ prefixes: ['.'], prefixless: false });
             
             await sendStyledMessage(sock, chatId, `╭──❍「 *🔧 PREFIX* 」❍
 ├ ✅ *Prefix Reset*
@@ -263,6 +406,7 @@ export default {
 ├ 📝 *Example* : .menu
 ╰──────❍
 ▰▰▰ *©️ MDINYANE BY STANY TZ* ▰▰▰`, [], msg);
+            console.log(`[PREFIX] Reset to default by ${senderId.split('@')[0]}`);
             return;
         }
         
