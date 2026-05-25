@@ -177,9 +177,9 @@ const BLOCKED_USERS_FILE = './blocked_users.json';
 const WELCOME_DATA_FILE = './data/welcome_data.json';
 const AUTO_CONNECT_ON_LINK = true;
 const AUTO_CONNECT_ON_START = true;
-const RATE_LIMIT_ENABLED = false;
-const MIN_COMMAND_DELAY = 1000;
-const STICKER_DELAY = 2000;
+const RATE_LIMIT_ENABLED = false;  // DISABLED - No rate limits
+const MIN_COMMAND_DELAY = 0;        // No delay
+const STICKER_DELAY = 0;            // No delay
 const AUTO_JOIN_ENABLED = true;
 const AUTO_JOIN_DELAY = 5000;
 const SEND_WELCOME_MESSAGE = true;
@@ -279,7 +279,7 @@ const ultraSilentLogger = {
 };
 
 // ============================================================
-// RATE LIMITER
+// RATE LIMITER - FULLY DISABLED
 // ============================================================
 
 class RateLimitProtection {
@@ -291,34 +291,16 @@ class RateLimitProtection {
         setInterval(() => this.cleanup(), 60000);
     }
     canSendCommand(chatId, userId, command) {
-        if (!RATE_LIMIT_ENABLED) return { allowed: true };
-        const now = Date.now();
-        const userKey = `${userId}_${command}`;
-        const chatKey = `${chatId}_${command}`;
-        if (this.userCooldowns.has(userKey)) {
-            const timeDiff = now - this.userCooldowns.get(userKey);
-            if (timeDiff < MIN_COMMAND_DELAY) return { allowed: false, reason: `Please wait ${Math.ceil((MIN_COMMAND_DELAY - timeDiff) / 1000)}s before using ${command} again.` };
-        }
-        if (this.commandTimestamps.has(chatKey)) {
-            const timeDiff = now - this.commandTimestamps.get(chatKey);
-            if (timeDiff < MIN_COMMAND_DELAY) return { allowed: false, reason: `Command cooldown: ${Math.ceil((MIN_COMMAND_DELAY - timeDiff) / 1000)}s remaining.` };
-        }
-        if (now - this.globalCooldown < 250) return { allowed: false, reason: 'System is busy. Please try again in a moment.' };
-        this.userCooldowns.set(userKey, now);
-        this.commandTimestamps.set(chatKey, now);
-        this.globalCooldown = now;
+        // RATE LIMIT FULLY DISABLED - Always allowed
         return { allowed: true };
     }
     async waitForSticker(chatId) {
-        if (!RATE_LIMIT_ENABLED) { await this.delay(STICKER_DELAY); return; }
-        const now = Date.now();
-        const lastSticker = this.stickerSendTimes.get(chatId) || 0;
-        const timeDiff = now - lastSticker;
-        if (timeDiff < STICKER_DELAY) await this.delay(STICKER_DELAY - timeDiff);
-        this.stickerSendTimes.set(chatId, Date.now());
+        // No delay for stickers
+        return;
     }
     delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
     cleanup() {
+        // Cleanup old entries
         const now = Date.now();
         const fiveMinutes = 5 * 60 * 1000;
         for (const [key, timestamp] of this.userCooldowns.entries()) { if (now - timestamp > fiveMinutes) this.userCooldowns.delete(key); }
@@ -396,8 +378,7 @@ function updateTerminalHeader() {
 ╔══════════════════════════════════════════════════════════════════════╗
 ║   🀄️ ${chalk.bold(`${BOT_NAME.toUpperCase()} v${VERSION}`)} on ${chalk.yellow(currentPlatform)}
 ║   💬 Prefix  : ${prefixDisplay}
-║   🔧 Auto Fix: ✅ ENABLED
-║   🛡️ Rate Limit Protection: ✅ ACTIVE
+║   🔧 Rate Limit: ${chalk.red('DISABLED')} - Owner Mode
 ║   🔗 Auto-Connect on Link: ${AUTO_CONNECT_ON_LINK ? '✅' : '❌'}
 ║   🔐 Login Methods: Pairing Code | Session ID
 ╚══════════════════════════════════════════════════════════════════════╝
@@ -409,7 +390,7 @@ isPrefixless = prefixCache === '' ? true : false;
 updateTerminalHeader();
 
 // ============================================================
-// SESSION AUTHENTICATION (UPDATED FOR HEROKU)
+// SESSION AUTHENTICATION
 // ============================================================
 
 function parseMDINYANESession(sessionString) {
@@ -431,41 +412,37 @@ async function authenticateWithSessionId(sessionId) {
     try {
         let cleanSessionId = sessionId.trim();
         
-        // If it's a URL or paste link
         if (cleanSessionId.startsWith('http://') || cleanSessionId.startsWith('https://')) {
             UltraCleanLogger.info('📥 Downloading session from URL...');
             await SaveCreds(cleanSessionId);
             return true;
         }
         
-        // Check if it's a Stany format session ID
         if (cleanSessionId.includes('Stanytz378/iamlegendv2_')) {
             UltraCleanLogger.info('📥 Downloading session from paste service...');
             await SaveCreds(cleanSessionId);
             
             const credsPath = path.join(SESSION_DIR, 'creds.json');
             if (fs.existsSync(credsPath)) {
-                UltraCleanLogger.success('💾 Session saved successfully to session/creds.json');
+                UltraCleanLogger.success('💾 Session saved successfully');
                 return true;
             } else {
                 throw new Error('Session file not created');
             }
         }
         
-        // Try parsing as JSON
         try {
             const sessionData = JSON.parse(cleanSessionId);
             if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
             fs.writeFileSync(path.join(SESSION_DIR, 'creds.json'), JSON.stringify(sessionData, null, 2));
-            UltraCleanLogger.success('💾 Session saved to session/creds.json');
+            UltraCleanLogger.success('💾 Session saved');
             return true;
         } catch (e) {
-            // Not JSON, try base64
             try {
                 const sessionData = JSON.parse(Buffer.from(cleanSessionId, 'base64').toString('utf8'));
                 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
                 fs.writeFileSync(path.join(SESSION_DIR, 'creds.json'), JSON.stringify(sessionData, null, 2));
-                UltraCleanLogger.success('💾 Base64 session saved to session/creds.json');
+                UltraCleanLogger.success('💾 Base64 session saved');
                 return true;
             } catch (e2) {
                 throw new Error('Invalid session format');
@@ -478,7 +455,7 @@ async function authenticateWithSessionId(sessionId) {
 }
 
 // ============================================================
-// JID MANAGER & OWNER
+// JID MANAGER & OWNER - FIXED
 // ============================================================
 
 let OWNER_NUMBER = null, OWNER_JID = null, OWNER_CLEAN_JID = null, OWNER_CLEAN_NUMBER = null, OWNER_LID = null;
@@ -513,9 +490,10 @@ class JidManager {
                     this.ownerJids.add(cleaned.cleanJid); this.ownerJids.add(ownerJid);
                     if (cleaned.isLid) { this.ownerLids.add(ownerJid); this.ownerLids.add(ownerJid.split('@')[0]); OWNER_LID = ownerJid; }
                     OWNER_JID = ownerJid; OWNER_NUMBER = cleaned.cleanNumber; OWNER_CLEAN_JID = cleaned.cleanJid; OWNER_CLEAN_NUMBER = cleaned.cleanNumber;
+                    UltraCleanLogger.success(`Owner loaded: ${OWNER_CLEAN_NUMBER}`);
                 }
             }
-        } catch {}
+        } catch (error) { UltraCleanLogger.warning(`Error loading owner: ${error.message}`); }
     }
     loadWhitelist() {
         try {
@@ -537,15 +515,30 @@ class JidManager {
     }
     isOwner(msg) {
         if (!msg || !msg.key) return false;
+        
+        // Check fromMe flag
+        if (msg.key.fromMe) return true;
+        
         const senderJid = msg.key.participant || msg.key.remoteJid;
         const cleaned = this.cleanJid(senderJid);
-        if (!this.owner || !this.owner.cleanNumber) return false;
+        
+        if (!this.owner || !this.owner.cleanNumber) {
+            this.loadOwnerData();
+        }
+        
+        if (this.owner && this.owner.cleanNumber) {
+            if (cleaned.cleanNumber === this.owner.cleanNumber) return true;
+            if (senderJid === this.owner.rawJid || senderJid === this.owner.cleanJid) return true;
+        }
+        
         if (this.ownerJids.has(cleaned.cleanJid) || this.ownerJids.has(senderJid)) return true;
+        
         if (cleaned.isLid) {
             const lidNumber = cleaned.cleanNumber;
             if (this.ownerLids.has(senderJid) || this.ownerLids.has(lidNumber)) return true;
             if (OWNER_LID && (senderJid === OWNER_LID || lidNumber === OWNER_LID.split('@')[0])) return true;
         }
+        
         return false;
     }
     setNewOwner(newJid, isAutoLinked = false) {
@@ -556,10 +549,23 @@ class JidManager {
             this.ownerJids.add(cleaned.cleanJid); this.ownerJids.add(newJid);
             if (cleaned.isLid) { this.ownerLids.add(newJid); this.ownerLids.add(newJid.split('@')[0]); OWNER_LID = newJid; } else { OWNER_LID = null; }
             OWNER_JID = newJid; OWNER_NUMBER = cleaned.cleanNumber; OWNER_CLEAN_JID = cleaned.cleanJid; OWNER_CLEAN_NUMBER = cleaned.cleanNumber;
-            fs.writeFileSync(OWNER_FILE, JSON.stringify({ OWNER_JID: newJid, OWNER_NUMBER: cleaned.cleanNumber, OWNER_CLEAN_JID: cleaned.cleanJid, OWNER_CLEAN_NUMBER: cleaned.cleanNumber, ownerLID: cleaned.isLid ? newJid : null, linkedAt: new Date().toISOString(), autoLinked: isAutoLinked, previousOwnerCleared: true, version: VERSION }, null, 2));
-            UltraCleanLogger.success(`New owner set: ${cleaned.cleanJid}`);
+            fs.writeFileSync(OWNER_FILE, JSON.stringify({ 
+                OWNER_JID: newJid, 
+                OWNER_NUMBER: cleaned.cleanNumber, 
+                OWNER_CLEAN_JID: cleaned.cleanJid, 
+                OWNER_CLEAN_NUMBER: cleaned.cleanNumber, 
+                ownerLID: cleaned.isLid ? newJid : null, 
+                linkedAt: new Date().toISOString(), 
+                autoLinked: isAutoLinked, 
+                previousOwnerCleared: true, 
+                version: VERSION 
+            }, null, 2));
+            UltraCleanLogger.success(`✅ New owner set: ${cleaned.cleanNumber}`);
             return { success: true, owner: this.owner, isLid: cleaned.isLid };
-        } catch { return { success: false, error: 'Failed to set new owner' }; }
+        } catch (error) { 
+            UltraCleanLogger.error(`Failed to set owner: ${error.message}`);
+            return { success: false, error: 'Failed to set new owner' }; 
+        }
     }
     getOwnerInfo() {
         return { ownerJid: this.owner?.cleanJid || null, ownerNumber: this.owner?.cleanNumber || null, ownerLid: OWNER_LID || null, jidCount: this.ownerJids.size, lidCount: this.ownerLids.size, whitelistCount: WHITELIST.size, isLid: this.owner?.isLid || false, linkedAt: this.owner?.linkedAt || null };
@@ -567,6 +573,28 @@ class JidManager {
 }
 
 const jidManager = new JidManager();
+
+// ============================================================
+// FORCE OWNER ON STARTUP
+// ============================================================
+
+function forceOwnerFromSession() {
+    try {
+        const credsPath = path.join(SESSION_DIR, 'creds.json');
+        if (fs.existsSync(credsPath)) {
+            const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+            if (creds && creds.me && creds.me.id) {
+                const botOwnerJid = creds.me.id;
+                UltraCleanLogger.info(`🔧 Force setting owner from session: ${botOwnerJid}`);
+                jidManager.setNewOwner(botOwnerJid, true);
+                return true;
+            }
+        }
+    } catch (error) {
+        UltraCleanLogger.warning(`Could not force owner from session: ${error.message}`);
+    }
+    return false;
+}
 
 // ============================================================
 // NEW MEMBER DETECTOR
@@ -939,7 +967,7 @@ function checkBotMode(msg, commandName) {
         switch (BOT_MODE) {
             case 'public': return true; case 'private': return false; case 'silent': return false;
             case 'group-only': return chatJid.includes('@g.us');
-            case 'maintenance': return ['ping', 'status', 'uptime', 'help'].includes(commandName);
+            case 'maintenance': return ['ping', 'status', 'uptime', 'help', 'ownerinfo'].includes(commandName);
             default: return true;
         }
     } catch { return true; }
@@ -1003,6 +1031,26 @@ async function loadCommandsFromFolder(folderPath, category = 'general') {
         }
         if (categoryCount > 0) UltraCleanLogger.info(`${categoryCount} commands loaded from ${category}`);
     } catch {}
+}
+
+// ============================================================
+// OWNER INFO COMMAND (Built-in)
+// ============================================================
+
+async function sendOwnerInfo(sock, msg, args, prefix) {
+    const chatId = msg.key.remoteJid;
+    const ownerInfo = jidManager.getOwnerInfo();
+    const isSenderOwner = jidManager.isOwner(msg);
+    
+    let response = `👑 *OWNER INFORMATION*\n\n`;
+    response += `📱 Owner Number: ${ownerInfo.ownerNumber ? `+${ownerInfo.ownerNumber}` : 'Not set'}\n`;
+    response += `🔗 Owner JID: ${ownerInfo.ownerJid || 'Not set'}\n`;
+    response += `✅ You are Owner: ${isSenderOwner ? 'YES 👑' : 'NO ❌'}\n`;
+    response += `🖥️ Platform: ${currentPlatform}\n`;
+    response += `🤖 Bot Name: ${BOT_NAME} v${VERSION}\n`;
+    response += `⚡ Rate Limit: DISABLED\n`;
+    
+    await sock.sendMessage(chatId, { text: response }, { quoted: msg });
 }
 
 // ============================================================
@@ -1095,10 +1143,15 @@ async function startBot(loginMode = 'pair', loginData = null) {
     try {
         UltraCleanLogger.info(`🚀 Initializing WhatsApp connection on ${currentPlatform}...`);
         
+        // Force owner from session before starting
+        forceOwnerFromSession();
+        
         if (loginMode === 'session' && loginData) {
             try { 
                 await authenticateWithSessionId(loginData); 
                 UltraCleanLogger.success('✅ Session loaded successfully!');
+                // Force owner again after session load
+                forceOwnerFromSession();
             } catch (error) { 
                 UltraCleanLogger.error(`Session loading failed: ${error.message}`);
                 if (isHeroku) {
@@ -1335,17 +1388,19 @@ async function triggerRestartAutoFix(sock) {
 async function handleSuccessfulConnection(sock, loginMode, loginData) {
     OWNER_JID = sock.user.id; 
     OWNER_NUMBER = OWNER_JID.split('@')[0];
-    const isFirstConnection = !fs.existsSync(OWNER_FILE);
-    if (isFirstConnection) jidManager.setNewOwner(OWNER_JID, false); 
-    else jidManager.loadOwnerData();
+    
+    // FORCE SET OWNER FROM CONNECTED DEVICE
+    const forceResult = jidManager.setNewOwner(OWNER_JID, true);
+    UltraCleanLogger.success(`👑 Owner forced set to: ${OWNER_JID}`);
+    
     const ownerInfo = jidManager.getOwnerInfo();
     const currentPrefix = getCurrentPrefix();
     const prefixDisplay = isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`;
     updateTerminalHeader();
-    console.log(chalk.greenBright(`\n╔══════════════════════════════════════╗\n║    🀄️ MDINYANE ONLINE v${VERSION}           ║\n╠══════════════════════════════════════╣\n║  ✅ Connected on ${currentPlatform}!\n║  👑 Owner  : +${ownerInfo.ownerNumber}\n║  💬 Prefix : ${prefixDisplay}\n╚══════════════════════════════════════╝\n`));
+    console.log(chalk.greenBright(`\n╔══════════════════════════════════════╗\n║    🀄️ MDINYANE ONLINE v${VERSION}           ║\n╠══════════════════════════════════════╣\n║  ✅ Connected on ${currentPlatform}!\n║  👑 Owner  : +${ownerInfo.ownerNumber}\n║  💬 Prefix : ${prefixDisplay}\n║  ⚡ Rate Limit: DISABLED\n╚══════════════════════════════════════╝\n`));
     const cleaned = jidManager.cleanJid(OWNER_JID);
     if (ultimateFixSystem.isFixNeeded(OWNER_JID)) {
-        setTimeout(async () => { await ultimateFixSystem.applyUltimateFix(sock, OWNER_JID, cleaned, isFirstConnection); }, 1200);
+        setTimeout(async () => { await ultimateFixSystem.applyUltimateFix(sock, OWNER_JID, cleaned, true); }, 1200);
     }
     setTimeout(async () => {
         try {
@@ -1368,8 +1423,9 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  ✅ *Linked Successfully*
 ┃  🤖 *Bot:* ${BOT_NAME} v${VERSION}
 ┃  🖥️ *Platform:* ${currentPlatform}
-┃  📱 *Your Number:* +${ownerInfo.ownerNumber}
+┃  👑 *Owner:* +${ownerInfo.ownerNumber}
 ┃  ⏰ *Time:* ${time} | 📅 ${date}
+┃  ⚡ *Rate Limit:* DISABLED
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
@@ -1387,6 +1443,7 @@ async function handleSuccessfulConnection(sock, loginMode, loginData) {
 ┃  ✨ \`${prefixDisplay}menu\` - Show all commands
 ┃  📢 \`${prefixDisplay}owner\` - Contact owner
 ┃  📸 \`${prefixDisplay}sticker\` - Convert to sticker
+┃  👑 \`${prefixDisplay}ownerinfo\` - Check owner status
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━⬣
 
@@ -1574,7 +1631,6 @@ async function logIncomingMessage(sock, msg, textMsg) {
 }
 
 async function handleIncomingMessage(sock, msg) {
-    const startTime = Date.now();
     try {
         const chatId = msg.key.remoteJid;
         const senderJid = msg.key.participant || chatId;
@@ -1611,9 +1667,7 @@ async function handleIncomingMessage(sock, msg) {
         
         if (!commandName) return;
         
-        const rateLimitCheck = rateLimiter.canSendCommand(chatId, senderJid, commandName);
-        if (!rateLimitCheck.allowed) { await sock.sendMessage(chatId, { text: `⚠️ ${rateLimitCheck.reason}` }); return; }
-        
+        // No rate limit check - always allowed
         const prefixDisplay = usedPrefix || (isPrefixlessMode ? '' : prefixes[0]);
         UltraCleanLogger.command(`${chatId.split('@')[0]} → ${prefixDisplay}${commandName}`);
         
@@ -1624,6 +1678,12 @@ async function handleIncomingMessage(sock, msg) {
         }
         
         if (commandName === 'connect' || commandName === 'link') { const cleaned = jidManager.cleanJid(senderJid); await handleConnectCommand(sock, msg, args, cleaned); return; }
+        
+        // Owner info command built-in
+        if (commandName === 'ownerinfo' || commandName === 'checkowner') {
+            await sendOwnerInfo(sock, msg, args, usedPrefix || prefixes[0]);
+            return;
+        }
         
         const command = commands.get(commandName);
         if (command) {
@@ -1665,16 +1725,17 @@ async function handleDefaultCommands(commandName, sock, msg, args, currentPrefix
     const isOwnerUser = jidManager.isOwner(msg);
     try {
         switch (commandName) {
-            case 'ping': await sock.sendMessage(chatId, { text: `🀄️ *MDINYANE v${VERSION}* — Pong! ✅\n⏱️ Uptime: ${Math.round(process.uptime())}s\n🖥️ Platform: ${currentPlatform}` }, { quoted: msg }); break;
+            case 'ping': await sock.sendMessage(chatId, { text: `🀄️ *MDINYANE v${VERSION}* — Pong! ✅\n⏱️ Uptime: ${Math.round(process.uptime())}s\n🖥️ Platform: ${currentPlatform}\n⚡ Rate Limit: DISABLED\n👑 Owner: ${isOwnerUser ? 'YES' : 'NO'}` }, { quoted: msg }); break;
             case 'uptime': { const uptime = process.uptime(); await sock.sendMessage(chatId, { text: `⏰ *Uptime:* ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s\n💾 *Memory:* ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB\n🖥️ *Platform:* ${currentPlatform}` }, { quoted: msg }); break; }
             case 'help': {
-                let helpText = `🀄️ *${BOT_NAME} v${VERSION} HELP*\n\n📋 *Prefix:* ${isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`}\n📊 *Total Commands:* ${commands.size}\n🖥️ *Platform:* ${currentPlatform}\n\n`;
+                let helpText = `🀄️ *${BOT_NAME} v${VERSION} HELP*\n\n📋 *Prefix:* ${isPrefixless ? 'none (prefixless)' : `"${currentPrefix}"`}\n📊 *Total Commands:* ${commands.size}\n🖥️ *Platform:* ${currentPlatform}\n⚡ *Rate Limit:* DISABLED\n\n`;
                 for (const category of commandCategories.keys()) { const cmdList = commandCategories.get(category); helpText += `*${category.toUpperCase()}*\n${cmdList.map(c => `• ${currentPrefix}${c}`).join('\n')}\n\n`; }
+                helpText += `*BUILT-IN*\n• ${currentPrefix}ownerinfo - Check owner status\n• ${currentPrefix}ping - Check bot response\n`;
                 await sock.sendMessage(chatId, { text: helpText }, { quoted: msg }); break;
             }
             case 'statusstats': { if (!statusDetector) { await sock.sendMessage(chatId, { text: '❌ Status Detector not initialized' }, { quoted: msg }); break; } const stats = statusDetector.getStats(); await sock.sendMessage(chatId, { text: `👁️ *STATUS DETECTOR STATS*\n\n📊 Total Detected: ${stats.totalDetected}\n🕒 Last Detection: ${stats.lastDetection}\n🔧 Detection Enabled: ${stats.detectionEnabled ? '✅' : '❌'}` }, { quoted: msg }); break; }
             case 'prefixinfo': { const currentP = getCurrentPrefix(); await sock.sendMessage(chatId, { text: `💬 *PREFIX INFO*\n\nCurrent Prefix: ${isPrefixless ? 'none' : `"${currentP}"`}\nPrefixless Mode: ${isPrefixless ? '✅' : '❌'}` }, { quoted: msg }); break; }
-            case 'platform': { await sock.sendMessage(chatId, { text: `🖥️ *PLATFORM INFO*\n\n├─ Platform: ${currentPlatform}\n├─ Node Version: ${process.version}\n├─ Uptime: ${Math.round(process.uptime())}s\n└─ Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB` }, { quoted: msg }); break; }
+            case 'platform': { await sock.sendMessage(chatId, { text: `🖥️ *PLATFORM INFO*\n\n├─ Platform: ${currentPlatform}\n├─ Node Version: ${process.version}\n├─ Uptime: ${Math.round(process.uptime())}s\n├─ Rate Limit: DISABLED\n└─ Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB` }, { quoted: msg }); break; }
         }
     } catch (error) { UltraCleanLogger.error(`Default command error: ${error.message}`); }
 }
@@ -1739,7 +1800,9 @@ if (isPanel) {
                     version: VERSION,
                     platform: currentPlatform,
                     commands: commands.size,
-                    connected: isConnected
+                    connected: isConnected,
+                    owner: jidManager.getOwnerInfo().ownerNumber,
+                    rateLimit: 'DISABLED'
                 }));
             } else {
                 res.writeHead(404);
@@ -1754,12 +1817,13 @@ if (isPanel) {
 }
 
 // ============================================================
-// MAIN FUNCTION - UPDATED FOR PLATFORM DETECTION
+// MAIN FUNCTION - UPDATED
 // ============================================================
 
 async function main() {
     try {
         UltraCleanLogger.success(`🚀 Starting ${BOT_NAME} v${VERSION} on ${currentPlatform}`);
+        UltraCleanLogger.info(`⚡ Rate Limit: ${RATE_LIMIT_ENABLED ? 'ENABLED' : 'DISABLED'}`);
         
         if (isHeroku) {
             // HEROKU MODE: Automatic session loading - NO MENU
@@ -1775,20 +1839,20 @@ async function main() {
             UltraCleanLogger.info('🤖 Heroku mode detected - Loading session automatically...');
             UltraCleanLogger.info(`📋 Session ID: ${sessionId.substring(0, 30)}...`);
             
-            // Save session directly
             try {
                 await authenticateWithSessionId(sessionId.trim());
                 UltraCleanLogger.success('✅ Session loaded successfully!');
                 
-                // Start bot with session mode
+                // Force owner after session load
+                forceOwnerFromSession();
+                
                 await startBot('session', sessionId.trim());
             } catch (error) {
                 UltraCleanLogger.error(`❌ Failed to load session: ${error.message}`);
-                UltraCleanLogger.error('💡 Make sure your SESSION_ID is valid and accessible');
                 process.exit(1);
             }
         } else {
-            // PANEL / LOCAL MODE: Show menu (1,2,3) for manual setup
+            // PANEL / LOCAL MODE: Show menu
             UltraCleanLogger.info('🖥️ Panel/Local mode detected - Showing login menu...');
             const loginManager = new LoginManager();
             const loginInfo = await loginManager.selectMode();
@@ -1830,17 +1894,10 @@ process.on('SIGTERM', () => {
 
 process.on('uncaughtException', (error) => { 
     UltraCleanLogger.error(`Uncaught exception: ${error.message}`); 
-    if (!isHeroku) {
-        // Don't crash on non-Heroku platforms
-        console.log(chalk.yellow('⚠️ Continuing despite error...'));
-    }
 });
 
 process.on('unhandledRejection', (error) => { 
     UltraCleanLogger.error(`Unhandled rejection: ${error?.message}`); 
-    if (!isHeroku) {
-        console.log(chalk.yellow('⚠️ Continuing despite rejection...'));
-    }
 });
 
 setInterval(() => { 
